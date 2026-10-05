@@ -1,6 +1,6 @@
 # remote_input over cloudflare_realtime: a reference adapter
 
-An `InputLink` for [`remote_input`](../../README.md) over the DataChannels of [`cloudflare_realtime`](https://github.com/kammcs/flutter-cloudflare-realtime), in the layout of [design.md §9](../../docs/design.md#9-how-the-first-consumer-uses-it). About 150 lines, in [`lib/cloudflare_realtime_input_link.dart`](lib/cloudflare_realtime_input_link.dart).
+An `InputLink` for [`remote_input`](../../README.md) over the DataChannels of [`cloudflare_realtime`](https://github.com/kammcs/flutter-cloudflare-realtime), in the layout of [design.md §9](../../docs/design.md#9-how-the-first-consumer-uses-it). About 200 lines, in [`lib/cloudflare_realtime_input_link.dart`](lib/cloudflare_realtime_input_link.dart).
 
 It is a **reference to copy into an app**, not a published package. It is kept apart from the example app, so the example doesn't pull in WebRTC, and `remote_input` itself never depends on a transport.
 
@@ -32,12 +32,19 @@ final session = RemoteInputHost().enable(
   options: HostOptions(expiresAt: grantExpiry),
 );
 
-// Either side, when done:
-await hostLink.close();                          // the session stops with linkClosed
+// After a reconnect (the link reported closed), once consent is given again:
+await hostLink.attach(grantedViewer);            // a fresh attachment on the same link
+final next = RemoteInputHost().enable(link: hostLink, surface: ...);
+
+// Either side, when done with this peer:
+await hostLink.detach();                         // the session stops with linkClosed
+// ...or for good, which also unpublishes this side's channels:
+await hostLink.close();
 ```
 
 - **Sender identity** comes from `RoomDataMessage.participantId`, which `cloudflare_realtime` derives from the channel's session and the room's signaling, never from the payload. Messages from anyone but the attached peer are dropped. Bind `grantedViewer` to the participant your server granted.
-- **One link per session.** If either side reconnects (a new session), the channels are interrupted and the control session stops with `linkClosed`. Ask again and start a new one; don't carry control across a reconnect.
+- **A reconnect ends control; the link is reused.** If either side reconnects (the room's own reconnect, or the peer's, which makes `cloudflare_realtime` move the subscription to a new channel), the link reports closed and the session or viewer on it stops with `linkClosed`. That `false` is final for the attachment: the link stays closed rather than reopening under a stopped session. remote_input never carries control across a reconnect, so ask for consent again, then call `attach` again and start a new session (or viewer); it reads the new attachment's channels. Published channels survive reconnects, so there's no need to publish again. `close()` is final.
+- **Create the session or viewer after `attach`.** Each attachment has its own channels; one created before `attach` belongs to the previous attachment and stops when `attach` begins.
 - **Web viewers:** a browser endpoint of an unreliable channel still retransmits (a `dart_webrtc` limitation that `cloudflare_realtime` documents). Stale-move dropping keeps the pointer correct; moves may arrive later under loss.
 
 ## Security notes

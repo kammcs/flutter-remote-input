@@ -29,7 +29,7 @@ A real `RemoteInputHost` on a `FakeHostPlatform` from `package:remote_input/test
 3. The host asks: **"A viewer wants to control this computer"**, with the name the viewer gave (not verified) and whether to allow the keyboard. Only on **Allow** does it call `host.enable(...)`, with a 30-minute expiry.
 4. While a viewer is in control, the host shows a banner with the state (paused while you use your own mouse, blocked reasons, why it stopped), **Stop** and **Pause**, the viewer's platform and counts. Closing the app stops control (`RemoteInputHost.stopAll()`).
 
-Pairing rules: one viewer at a time; each code works once, and five wrong codes replace it.
+Pairing rules: one viewer at a time; each code works once (the host's refresh button also replaces it). Wrong codes never replace it, so someone guessing can't lock the real viewer out; instead, after five wrong codes an address is refused for 30 seconds, twice as long each time after, up to an hour. A socket that sends more than 16 frames or 64 KiB before pairing is dropped.
 
 Notes per viewer platform:
 
@@ -62,4 +62,4 @@ The example never logs what is typed, key codes or positions; it only draws them
 
 ## cloudflare_realtime
 
-[`cloudflare_realtime_adapter/`](cloudflare_realtime_adapter/README.md) is the reference adapter for a call's DataChannels (design.md §9): about 150 lines to copy into an app. It is a separate package, so this example doesn't depend on WebRTC.
+[`cloudflare_realtime_adapter/`](cloudflare_realtime_adapter/README.md) is the reference adapter for a call's DataChannels (design.md §9): about 200 lines to copy into an app. It is a separate package, so this example doesn't depend on WebRTC.

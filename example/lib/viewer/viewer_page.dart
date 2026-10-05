@@ -14,9 +14,27 @@ import 'remote_placeholder.dart';
 
 /// Controls another computer that runs this example as a host, over the
 /// development WebSocket link. Works on every platform.
+///
+/// On a short screen (under [compactHeight], or a phone with its soft
+/// keyboard up) the app bar and the toolbar fold into one strip of buttons
+/// beside the picture (above it, in portrait), the stats line goes, and the
+/// key bar shows only while the picture keeps at least [minCaptureShare] of
+/// the height.
 class ViewerPage extends StatefulWidget {
-  /// Creates the viewer screen.
-  const ViewerPage({super.key});
+  /// Creates the viewer screen. [viewer] is for tests: a viewer already
+  /// connected (over a `MemoryInputLink`), shown at once and closed on
+  /// disconnect.
+  const ViewerPage({super.key, @visibleForTesting this.viewer});
+
+  /// A viewer to show instead of the connect form.
+  final RemoteInputViewer? viewer;
+
+  /// Below this visible height, in logical pixels, the controls fold into
+  /// a strip.
+  static const double compactHeight = 480;
+
+  /// The least share of the height the picture keeps.
+  static const double minCaptureShare = 0.4;
 
   @override
   State<ViewerPage> createState() => _ViewerPageState();
@@ -39,6 +57,7 @@ class _ViewerPageState extends State<ViewerPage> {
   final List<StreamSubscription<Object?>> _subscriptions = [];
   Timer? _ticker;
   RttWindow _rtt = RttWindow();
+  GlobalKey _pictureKey = GlobalKey();
 
   KeyboardMode _keyboardMode = KeyboardMode.auto;
   TouchMode? _touchMode;
@@ -56,6 +75,13 @@ class _ViewerPageState extends State<ViewerPage> {
       TargetPlatform.fuchsia => 'Fuchsia',
     };
     return kIsWeb ? 'a browser ($os)' : os;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final viewer = widget.viewer;
+    if (viewer != null) _attach(viewer, null);
   }
 
   @override
@@ -88,10 +114,12 @@ class _ViewerPageState extends State<ViewerPage> {
         await connection.close();
         return;
       }
-      _attach(connection);
+      setState(
+        () => _attach(RemoteInputViewer(link: connection.link), connection),
+      );
     } on PairingException catch (e) {
       if (mounted && !cancel.isCompleted) {
-        setState(() => _error = e.failure.message);
+        setState(() => _error = e.message);
       }
     } finally {
       if (mounted) {
@@ -111,10 +139,10 @@ class _ViewerPageState extends State<ViewerPage> {
     });
   }
 
-  void _attach(SocketConnection connection) {
-    final viewer = RemoteInputViewer(link: connection.link);
+  void _attach(RemoteInputViewer viewer, SocketConnection? connection) {
     _connection = connection;
     _viewer = viewer;
+    _pictureKey = GlobalKey(); // A fresh capture for each viewer.
     _subscriptions
       ..add(viewer.stateChanges.listen((_) => _rebuild()))
       ..add(viewer.surfaceChanges.listen((_) => _rebuild()));
@@ -124,7 +152,6 @@ class _ViewerPageState extends State<ViewerPage> {
       _rebuild();
     });
     _code.clear(); // Codes work once.
-    _rebuild();
   }
 
   void _rebuild() {
@@ -148,22 +175,40 @@ class _ViewerPageState extends State<ViewerPage> {
   @override
   Widget build(BuildContext context) {
     final viewer = _viewer;
+    final media = MediaQuery.of(context);
+    // What the soft keyboard and the system bars leave.
+    final visible =
+        media.size.height - media.viewInsets.bottom - media.padding.vertical;
+    final phoneWithKeyboardUp =
+        media.size.shortestSide < 600 && media.viewInsets.bottom > 0;
+    final compact =
+        viewer != null &&
+        (visible < ViewerPage.compactHeight || phoneWithKeyboardUp);
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Control another computer'),
-        actions: viewer == null
-            ? null
-            : [
-                SendKeysMenu(viewer: viewer, enabled: viewer.state.isActive),
-                IconButton(
-                  tooltip: 'Disconnect',
-                  icon: const Icon(Icons.link_off),
-                  onPressed: _disconnect,
-                ),
-              ],
-      ),
+      appBar: compact
+          ? null
+          : AppBar(
+              title: const Text('Control another computer'),
+              actions: viewer == null
+                  ? null
+                  : [
+                      SendKeysMenu(
+                        viewer: viewer,
+                        enabled: viewer.state.isActive,
+                      ),
+                      IconButton(
+                        tooltip: 'Disconnect',
+                        icon: const Icon(Icons.link_off),
+                        onPressed: _disconnect,
+                      ),
+                    ],
+            ),
       body: SafeArea(
-        child: viewer == null ? _connectForm(context) : _controlled(viewer),
+        child: viewer == null
+            ? _connectForm(context)
+            : compact
+            ? _compact(viewer)
+            : _controlled(viewer),
       ),
     );
   }
@@ -266,14 +311,17 @@ class _ViewerPageState extends State<ViewerPage> {
     );
   }
 
+  TouchMode get _defaultTouchMode =>
+      MediaQuery.sizeOf(context).shortestSide < 600
+      ? TouchMode.trackpad
+      : TouchMode.direct;
+
+  /// The full layout: the toolbar above the picture, the stats below.
   Widget _controlled(RemoteInputViewer viewer) {
     final theme = Theme.of(context);
     final state = viewer.state;
-    final surface = viewer.surface;
     final stats = viewer.stats;
-    final phone = MediaQuery.sizeOf(context).shortestSide < 600;
-    final touchMode =
-        _touchMode ?? (phone ? TouchMode.trackpad : TouchMode.direct);
+    final touchMode = _touchMode ?? _defaultTouchMode;
     final toolbar = Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
       child: Wrap(
@@ -282,29 +330,13 @@ class _ViewerPageState extends State<ViewerPage> {
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           SessionStateChip(state: state, side: Side.viewer),
-          Text(
-            'RTT ${formatRtt(stats.roundTripTime)}'
-            '${_rtt.count < 5 ? '' : '  (p50 ${formatRtt(_rtt.percentile(50))}, '
-                      'p95 ${formatRtt(_rtt.percentile(95))}, '
-                      'last ${_rtt.count} s)'}',
-            style: theme.textTheme.labelLarge,
-          ),
+          Text(_rttText(), style: theme.textTheme.labelLarge),
           DropdownButton<KeyboardMode>(
             value: _keyboardMode,
             onChanged: (m) => setState(() => _keyboardMode = m!),
-            items: const [
-              DropdownMenuItem(
-                value: KeyboardMode.auto,
-                child: Text('Keys: auto'),
-              ),
-              DropdownMenuItem(
-                value: KeyboardMode.physical,
-                child: Text('Keys: physical'),
-              ),
-              DropdownMenuItem(
-                value: KeyboardMode.text,
-                child: Text('Keys: text'),
-              ),
+            items: [
+              for (final (mode, label) in _keyboardModes)
+                DropdownMenuItem(value: mode, child: Text('Keys: $label')),
             ],
           ),
           SegmentedButton<TouchMode>(
@@ -336,46 +368,7 @@ class _ViewerPageState extends State<ViewerPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         toolbar,
-        Expanded(
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              CaptureView(
-                viewer: viewer,
-                contentSize: surface?.pixelSize,
-                keyboardMode: _keyboardMode,
-                touchMode: touchMode,
-                child: RemotePlaceholder(pixelSize: surface?.pixelSize),
-              ),
-              if (state.isStopped)
-                ColoredBox(
-                  color: Colors.black54,
-                  child: Center(
-                    child: Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              describeState(state, Side.viewer),
-                              style: theme.textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 16),
-                            FilledButton(
-                              onPressed: _disconnect,
-                              child: const Text('Back'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        if (_showKeyBar) KeyBarView(viewer: viewer),
+        Expanded(child: _pictureAndKeyBar(viewer, touchMode)),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
           child: Text(
@@ -385,6 +378,194 @@ class _ViewerPageState extends State<ViewerPage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// The short layout: no app bar and no stats; one strip of buttons
+  /// beside the picture (above it when the screen is taller than wide).
+  Widget _compact(RemoteInputViewer viewer) {
+    final touchMode = _touchMode ?? _defaultTouchMode;
+    return LayoutBuilder(
+      builder: (context, box) {
+        final beside = box.maxWidth >= box.maxHeight;
+        final strip = _ControlStrip(
+          axis: beside ? Axis.vertical : Axis.horizontal,
+          children: [
+            Tooltip(
+              message:
+                  '${describeState(viewer.state, Side.viewer)}\n'
+                  '${_rttText()}',
+              child: SessionStateChip(
+                state: viewer.state,
+                side: Side.viewer,
+                iconOnly: true,
+              ),
+            ),
+            SendKeysMenu(viewer: viewer, enabled: viewer.state.isActive),
+            PopupMenuButton<void Function()>(
+              tooltip: 'View options',
+              icon: const Icon(Icons.tune),
+              onSelected: (apply) => setState(apply),
+              itemBuilder: (context) => [
+                for (final (mode, label) in _keyboardModes)
+                  CheckedPopupMenuItem(
+                    value: () => _keyboardMode = mode,
+                    checked: _keyboardMode == mode,
+                    child: Text('Keys: $label'),
+                  ),
+                const PopupMenuDivider(),
+                for (final (mode, label) in [
+                  (TouchMode.trackpad, 'Touch: trackpad'),
+                  (TouchMode.direct, 'Touch: direct'),
+                ])
+                  CheckedPopupMenuItem(
+                    value: () => _touchMode = mode,
+                    checked: touchMode == mode,
+                    child: Text(label),
+                  ),
+                const PopupMenuDivider(),
+                CheckedPopupMenuItem(
+                  value: () => _showKeyBar = !_showKeyBar,
+                  checked: _showKeyBar,
+                  child: const Text('Key bar'),
+                ),
+              ],
+            ),
+            IconButton(
+              tooltip: 'Disconnect',
+              icon: const Icon(Icons.link_off),
+              onPressed: _disconnect,
+            ),
+          ],
+        );
+        return Flex(
+          direction: beside ? Axis.horizontal : Axis.vertical,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            strip,
+            Expanded(child: _pictureAndKeyBar(viewer, touchMode)),
+          ],
+        );
+      },
+    );
+  }
+
+  /// The picture, with the key bar under it while the picture keeps
+  /// [ViewerPage.minCaptureShare] of the page's height.
+  Widget _pictureAndKeyBar(RemoteInputViewer viewer, TouchMode touchMode) {
+    final page =
+        MediaQuery.sizeOf(context).height -
+        MediaQuery.viewInsetsOf(context).bottom;
+    return LayoutBuilder(
+      builder: (context, box) {
+        final keyBar =
+            _showKeyBar &&
+            box.maxHeight - _keyBarHeight >= ViewerPage.minCaptureShare * page;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: _picture(viewer, touchMode)),
+            if (keyBar) KeyBarView(viewer: viewer),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _picture(RemoteInputViewer viewer, TouchMode touchMode) {
+    final state = viewer.state;
+    final surface = viewer.surface;
+    return Stack(
+      // Keeps the capture's state (its focus, and so the soft keyboard)
+      // when the layout folds or unfolds around it.
+      key: _pictureKey,
+      fit: StackFit.expand,
+      children: [
+        CaptureView(
+          viewer: viewer,
+          contentSize: surface?.pixelSize,
+          keyboardMode: _keyboardMode,
+          touchMode: touchMode,
+          child: RemotePlaceholder(pixelSize: surface?.pixelSize),
+        ),
+        if (state.isStopped)
+          ColoredBox(
+            color: Colors.black54,
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              // Scaled down, never cut, however short the picture is.
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          describeState(state, Side.viewer),
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          onPressed: _disconnect,
+                          child: const Text('Back'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  String _rttText() =>
+      'RTT ${formatRtt(_viewer?.stats.roundTripTime)}'
+      '${_rtt.count < 5 ? '' : '  (p50 ${formatRtt(_rtt.percentile(50))}, '
+                'p95 ${formatRtt(_rtt.percentile(95))}, '
+                'last ${_rtt.count} s)'}';
+
+  static const List<(KeyboardMode, String)> _keyboardModes = [
+    (KeyboardMode.auto, 'auto'),
+    (KeyboardMode.physical, 'physical'),
+    (KeyboardMode.text, 'text'),
+  ];
+
+  /// `RemoteKeyBar`'s default height.
+  static const double _keyBarHeight = 44;
+}
+
+/// The short layout's buttons in a strip along [axis], with compact
+/// buttons. Buttons that don't fit wrap into a second column (or row)
+/// rather than scroll out of sight: a landscape phone with its keyboard up
+/// has room for two buttons in height.
+class _ControlStrip extends StatelessWidget {
+  const _ControlStrip({required this.axis, required this.children});
+
+  final Axis axis;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: theme.colorScheme.surfaceContainer,
+      child: Theme(
+        data: theme.copyWith(visualDensity: VisualDensity.compact),
+        child: Padding(
+          padding: const EdgeInsets.all(2),
+          child: Wrap(
+            direction: axis,
+            spacing: 2,
+            runSpacing: 2,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: children,
+          ),
+        ),
+      ),
     );
   }
 }
