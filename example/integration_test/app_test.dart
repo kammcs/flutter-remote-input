@@ -9,6 +9,7 @@ void main() {
 
   testWidgets('the example app starts', (tester) async {
     await tester.pumpWidget(const RemoteInputExampleApp());
-    expect(find.text('Protocol version 1'), findsOneWidget);
+    expect(find.text('One-machine demo'), findsOneWidget);
+    expect(find.textContaining('Protocol version 1'), findsOneWidget);
   });
 }
