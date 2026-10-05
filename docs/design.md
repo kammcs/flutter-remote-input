@@ -246,16 +246,17 @@ These are the package's job because they have to be enforced at the point of inj
 
 - A `RemoteInputHost` injects nothing until the app calls **`host.enable(...)`**, which returns a **`ControlSession`** bound to **one link and one surface**.
 - **One session at a time** per process in v1: a second `enable` while one is live throws a `StateError`.
-- Optional **`expiresAt`**: a local backstop that stops the session at that time, whatever the app's own grant logic does.
+- Optional **`expiresAt`**: a local backstop that stops the session at that time, whatever the app's own grant logic does. Besides its timer (which may fire late after the machine sleeps), it's checked before every injected event.
+- **The host app's own windows are off limits** (`HostOptions.protectHostWindows`, on by default; found in the M7 review): pointer input over a window of the host's own process is dropped, and keys are blocked (`blocked(hostAppInFront)`) while the host app is in front. Otherwise a viewer sharing a display could click the app's consent dialog, its Stop button or its chat as the presenter. Only tests that inject into their own window turn it off.
 - There is **no persistent "enabled" setting.** A session ends with its link, its surface, the app's `stop()`, or the process.
 
 ### 6.2 Instant stop
 
 - **`session.stop()` is synchronous.** It sets the session's stopped flag before it returns, and the injector checks that flag immediately before every OS call. Queued input is discarded.
-- After `stop()` returns, the **only** input the package injects is releasing the keys and buttons that session holds, so nothing stays stuck down. Releases complete within 50 ms (success criteria).
+- After `stop()` returns, the **only** input the package injects is releasing the keys and buttons that session holds, so nothing stays stuck down. Releases complete within 50 ms (success criteria). A button release is posted where the pointer last was, which on both platforms moves the pointer there. A release the OS refuses (on a secure desktop, with a stale permission) is retried while blocked, on resume, and once more at stop. `stop()` finishes even if the transport throws.
 - **`RemoteInputHost.stopAll()`** stops every session in the process: for the app's global revoke hotkey, tray menu or crash handler.
 - The session also stops by itself, with a reason, when its link closes, its surface goes away (a shared window closes), it expires, or it sees sustained violations (§6.4).
-- **Stuck input:** the viewer sends `ReleaseAll` when its view loses focus. If nothing arrives for `heartbeatTimeout` (5 s by default) while keys or buttons are held, the host releases them.
+- **Stuck input:** the viewer sends `ReleaseAll` when its view loses focus or its app goes to the background. If no message of this session arrives for `heartbeatTimeout` (5 s by default) while keys or buttons are held, the host releases them; malformed messages and other sessions' don't count. **A crash or a hot restart of the host leaves the OS's keys and buttons as they were**: nothing outside Dart releases them, so apps should call `RemoteInputHost.stopAll()` from their crash and exit handlers.
 
 ### 6.3 Local input wins
 
@@ -276,15 +277,16 @@ Defaults, which the app can lower but not raise past the caps:
 |---|---|---|
 | Message size | 2 KiB | 4 KiB |
 | `Text` per message | 1024 bytes of UTF-8 | 1024 |
-| Text rate | 200 characters/s, bursts to 400 | 1000/s |
+| Text rate | 200 characters/s, bursts to 400 | 1000/s, bursts to 2000 |
 | Moves applied | 250/s, coalesced (excess dropped) | 500/s |
-| Keys, buttons and wheel events | 60/s, bursts to 120 (token bucket) | 200/s |
+| Keys, buttons and wheel events | 60/s, bursts to 120 (token bucket) | 200/s, bursts to 400 |
+| Pings answered | 10/s, bursts to 20 | — |
 | Wheel delta per message | ±1200 pixels or ±10 lines (clamped) | — |
 | Keys held at once | 8 | 16 |
 | Queued reliable input | 64 events | 256 |
 
-- **Coordinates** can only name a point inside the surface (they're normalized); points are clamped to it, and a stale `surfaceEpoch` is dropped.
-- **Window surfaces:** a pointer event whose point isn't on the shared window, because another window covers it there, is dropped (`occluded`; open question 5 for the same app's menus and popups). **Keys are injected only while the shared window is in front**; otherwise they are dropped and the viewer is told.
+- **Coordinates** can only name a point inside the surface (they're normalized); after `contentInsets`, points are clamped to the surface's bounds, bounds that aren't finite and positive drop the event, and a stale `surfaceEpoch` is dropped.
+- **Window surfaces** (`SharedSurface.window` only): a pointer event whose point isn't on the shared window, because another window covers it there, is dropped (`occluded`; §7.2 and §7.3 for the shared app's own menus and popups). A button release there is posted where the pointer already is. **Keys are injected only while the shared window is in front**; otherwise they are dropped and the session is `blocked(windowNotInFront)` (keys only). A key for a window that has closed stops the session. **`SharedSurface.rect` and displays confine the pointer by coordinates only**: no occlusion check and no keyboard confinement.
 - **Display surfaces confine the pointer, not the keyboard.** Keys go to whatever window has focus on that machine, including windows on other displays. Apps should say so in their consent text (§11).
 - **Over the rate limits, reliable input queues; it isn't dropped.** Dropping a key release would leave a key stuck, so keys, buttons, wheel events and text wait in one ordered queue for their token bucket. Long text is typed in pieces as tokens refill. Moves wait while the queue isn't empty, so they never overtake it. A full queue stops the session with `stopped(flooding)`.
 - **Text never acts like keys.** Control characters other than tab, line feed and carriage return (Escape, Backspace, the C1 range) are stripped from `Text` before it's typed.
@@ -424,7 +426,7 @@ buildIt.Social's Phase 6 adds remote control to its calls. The package's API is 
 3. **The presenter's app enables a session:**
    - On macOS, it checks `RemoteInputPermissions.status()` and runs its onboarding if needed.
    - It builds an `InputLink` from the call's DataChannels, **accepting messages only from the granted viewer**, identified by the channel's session (which the video package maps to a participant), never by the payload.
-   - It calls `host.enable(link:, surface:, options: HostOptions(expiresAt: grantExpiry))`, with a `SharedSurface.rect` fed from the geometry stream, or `SharedSurface.window`.
+   - It calls `host.enable(link:, surface:, options: HostOptions(expiresAt: grantExpiry))`, with `SharedSurface.window` for a window share (only that confines the pointer to the window and keys to it while it's in front, §6.4) or `SharedSurface.display` for a display share; a `SharedSurface.rect` fed from the geometry stream maps coordinates but confines nothing beyond them.
    - It shows its banner and border, and follows `session.stateChanges` to say "Paused while you use your mouse" or "Can't control an app run as administrator".
 4. **The viewer's app wraps the screen-share view** in `RemoteInputCapture` with its end of the link, and shows the host's state.
 5. **Input travels over the call's DataChannels; the presenter's app injects.** Local input wins automatically (§6.3).
@@ -517,14 +519,17 @@ final testHost = RemoteInputHost(platform: platform);
 | Threat | Example | Package mitigation | Left to the app |
 |---|---|---|---|
 | **Eavesdropping in the call** | Another call member subscribes to the viewer's input channel and reads keystrokes | Nothing in the payload is secret-protected in v1 (open question 12) | Server-side restriction of who may subscribe to the input channels; per-grant channel names (§9) |
-| **Unauthorized viewer** | Someone in the call who wasn't granted control sends input | Off by default; a session reads only the link the app bound; session nonce and tag | Consent, server-side grants, filtering the transport by verified sender |
-| **Malicious authorized viewer** | Opens a terminal, downloads and runs something, reads files | Local input wins; instant stop and `stopAll()`; expiry backstop; keyboard can be off; `KeyFilter`; window surfaces confine the pointer and keys; no elevated targets | A visible banner and border, the revoke hotkey, trusting whom you grant, the audit log |
+| **Unauthorized viewer** | Someone in the call who wasn't granted control sends input | Off by default; a session reads only the link the app bound. The nonce and tag only stop stale and cross-session traffic: anyone who can read the host's channel learns the nonce, and the first `Hello` wins | Consent, server-side grants, filtering the transport by verified sender, **restricting who may subscribe to the input channels** (§9) |
+| **The viewer operating the host app** | Clicking the presenter's consent dialog to extend its own grant, pressing Stop, chatting as the presenter | `protectHostWindows` (on by default): no pointer input over the host's own windows, no keys while it's in front (§6.1) | Keeping consent and Stop controls off the shared surface |
+| **Malicious authorized viewer** | Opens a terminal, downloads and runs something, reads files | Local input wins (on Windows, local mouse movement is measured apart from injected moves; on macOS from the HID counters); instant stop and `stopAll()`; expiry backstop; keyboard can be off; `KeyFilter` (every press, repeats included; a modifier pressed after a key releases a rejected combination); text never acts like keys (Tab and line breaks are dropped while Ctrl, Alt or Meta is held); window surfaces confine the pointer and keys by window ownership (§7.2, §7.3); no elevated targets | A visible banner and border, the revoke hotkey, trusting whom you grant, the audit log |
 | **Replay** | Recorded input messages replayed later, or into another session | The session nonce in the handshake and the tag in every message; strictly increasing `seq` on the reliable channel; stale-move dropping; transport encryption | Grants bound to one call's media session |
 | **Flooding** | Thousands of moves or keys per second, huge text messages | Size caps, token buckets, coalescing, bounded queues, drop rather than buffer, and a stop on sustained violations (§6.4) | Rate limits on the request and grant flow |
 | **Coordinate escape** | Clicking outside the shared window or display | Normalized coordinates only, clamped to the surface; surface epochs; occlusion checks on window surfaces; a minimized window blocks input | Choosing a window share when control should be confined |
 | **Keyboard escape** | Typing into another app than the shared one | Window surfaces: keys only while the shared window is in front. **Display surfaces: keys go to any focused window** | Saying so in the consent text |
-| **Stuck input** | A key held down after the session ends | Releases on stop, pause, link loss, timeout and viewer blur | — |
-| **Privilege escalation** | Driving a UAC prompt or an elevated app | No elevation, no `uiAccess`, no service; elevated and secure contexts are detected and reported (§6.5) | Showing the limits |
+| **Stuck input** | A key held down after the session ends | Releases on stop, pause, link loss, timeout, viewer blur and viewer backgrounding; refused releases retried | `stopAll()` in crash and exit handlers: a crashed host can't release |
+| **Privilege escalation** | Driving a UAC prompt or an elevated app | No elevation, no `uiAccess`, no service; elevated and secure contexts are detected and reported (§6.5). **If the host app itself runs elevated**, elevated apps are at its level and can be controlled | Showing the limits; not running the host elevated |
+| **Session denial by a third party** | Someone who can write to the host's input channel sends 50 malformed messages and stops the session | Fails safe: the session stops (`protocolViolation`). Accepted risk | Restricting who can write to the channel |
+| **Another local process copying the injection tag** | Software on the presenter's machine tags its own synthetic input to look like the package's | It can only hide its own synthetic input from local-input detection; physical input never carries the injected flag, so detection still fails toward pausing. Accepted risk | — |
 | **Malformed input** | Crafted bytes against the decoder | Strict length checks, no exceptions out of the decoder, fuzz tests (§12) | — |
 | **Host spoofing towards the viewer** | Fake "paused" states | Low impact; the viewer's state is informational | Not presenting the viewer's state as a security guarantee |
 
