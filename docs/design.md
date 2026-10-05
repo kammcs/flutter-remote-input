@@ -2,7 +2,7 @@
 
 This package lets one person control another person's desktop with their keyboard and mouse, from inside a Flutter app. The **viewer** sees the **presenter's** shared screen (as video, from some other package), and their pointer and keyboard events over that view are captured, sent as a small versioned protocol over a transport the app provides, and **replayed as local input on the presenter's desktop**.
 
-- **Status:** pre-release (October 2026). M0 (scaffold) and M1 (the protocol, the codec, the host's Dart core, the viewer controller and the test fakes) are done. The platform injectors (M2, M3), the capture widget (M4) and the native safety detectors (M5) aren't built yet; for those, this document is the plan.
+- **Status:** pre-release (October 2026). **Feature complete in code:** M0–M6 are built and unit-tested: the protocol and Dart core (M1), the Windows (M2) and macOS (M3) injectors, the capture widget (M4), the native safety checks (M5) and the example (M6). **What isn't done is checking on devices:** nothing has injected on a real Windows or macOS machine yet, and the viewer's keyboard handling hasn't been tried on real browsers and phones. [checkpoint.md](checkpoint.md) lists those checks; statements marked **(verify)** wait on them. M7 (hardening and the security review) and M8 (publishing) follow.
 - **Companion docs:** [roadmap.md](roadmap.md) (milestones, success criteria, the consumer checkpoint).
 - Statements marked **(verify)** are believed true from documentation or forum answers but haven't been checked on a device. Each one has a milestone that checks it, and the result replaces the mark.
 
@@ -217,7 +217,9 @@ Two paths, chosen per keystroke on the viewer:
 
 - **`auto` (default):** printable characters without a command modifier go by **text**: letters, digits, punctuation, dead-key results, IME commits, emoji, phone keyboards. Everything else goes by **physical key**: Enter, Tab, Escape, Backspace, Delete, arrows, Home/End, Page Up/Down, function keys, and any key pressed with Ctrl, Alt (Option) or Meta (Cmd/Win) held, so shortcuts work. Modifier keys themselves are sent physically. Lock keys (Caps Lock, Num Lock) aren't forwarded: the text path carries case.
 - **`physical`:** every key by position, lock keys included. For games, terminals, or the same layout on both ends.
-- **`text`:** printable input by text only, and non-printing keys physically.
+- **`text`:** printable input by text only, and non-printing keys physically. Unlike `auto`, characters typed with Alt/Option (and Option dead keys) also go by text, so **Mac users on a US layout who type accents with Option should use `text`**; in `auto`, Option combinations go physically, like other modifiers.
+- **In every mode:** IME keys (Kana, Henkan, Hangul and the other LANG keys) stay on the viewer; Caps, Num and Scroll Lock aren't forwarded except in `physical`; a soft keyboard always types text, even in `physical`.
+- **AltGr (in `auto`):** a character typed with Ctrl+Alt (AltGr on Windows layouts) goes by text: Ctrl and Alt are lifted on the host first and pressed again before the next physical key, so `@` on a German layout isn't sent as Ctrl+Alt+Q.
 
 **Modifiers.** Each `Key` carries the viewer's modifier state (bits: Shift 1, Control 2, Alt 4, Meta 8), and the host corrects drift: if it holds an injected Shift the viewer no longer reports, it releases it. **Cross-platform shortcuts:** with `ModifierMapping.auto`, the default, when exactly one end is an Apple platform (macOS or iOS), the host swaps Control and Meta (Command, the Windows key) in both keys and modifier bits. So a Mac viewer's Cmd+C is Ctrl+C on a Windows presenter, and a Windows viewer's Ctrl+C is Cmd+C on a Mac. Alt and Option are the same key either way. `ModifierMapping.none` sends keys by position, unchanged. The mapping happens on the host, which knows both platforms from the handshake.
 
@@ -380,27 +382,36 @@ For apps' UI text (`RemoteInputHost.limitations`):
 Two pieces, both pure Flutter, on every platform:
 
 - **`RemoteInputViewer`** (built in M1): the controller. It owns the viewer's end of the link, the handshake, `seq`, coalescing (at most one move per 8 ms by default) and backpressure, pings every second for the round-trip time and as a heartbeat, and mirrors the host's state (`SessionWaiting`, `SessionActive`, `SessionPaused`, `SessionBlocked`, `SessionStopped`) for the app's UI. It sends nothing until the host says `active`. Its methods take **normalized points** (`Offset(0, 0)` to `Offset(1, 1)` across the picture, clamped): `pointerMove`, `pointerButton`, `click`, `wheel`, `key`, `text`, `sendShortcut`, `releaseAll` and `close`. Apps can call them directly, without the widget.
-- **`RemoteInputCapture`**: a widget that wraps the remote video view:
+- **`RemoteInputCapture`** (built in M4): a widget that wraps the remote video view, with a **`RemoteInputCaptureController`** (soft keyboard, focus, sticky modifiers) and a **`RemoteKeyBar`** for touch devices. All three are in `lib/src/viewer/capture/`; the rationale for the keyboard routing is in that library's doc.
 
 ```dart
+final controller = RemoteInputCaptureController();
 RemoteInputCapture(
   viewer: viewer,
-  contentSize: const Size(1920, 1080), // the video's frame size
+  controller: controller,
+  contentSize: const Size(1920, 1080), // the video's frame size; default: the host's announced size
   fit: BoxFit.contain,                 // how the view fits it, to find the letterbox
   keyboardMode: KeyboardMode.auto,
-  child: videoView,
+  touchMode: null,                     // trackpad on phones, direct elsewhere
+  child: SizedBox.expand(child: videoView),
 )
+RemoteKeyBar(viewer: viewer, controller: controller) // on touch devices
 ```
 
-It computes the content rect from `contentSize` and `fit` (or takes `contentRect` for custom layouts) and maps events into it (§3.1).
+It computes the content rect from `contentSize` and `fit` (or takes `contentRect` for custom layouts) and maps events into it (§3.1). The child is laid out unchanged, so the capture is only as big as the child: give it tight or expanding constraints. **While the session isn't active the widget is passive:** it claims no gestures, no wheel and no keys. When the session leaves `active`, or the widget loses focus, everything held is released (`ReleaseAll`).
 
-- **Pointer (mouse and trackpad):** `Listener` for down, move, up, hover and signals. Buttons map from Flutter's `kPrimaryButton` and the others. Scroll signals and trackpad pan-zoom become `Wheel` messages (pinch is ignored). The view counts clicks itself (§5.3). Moves are coalesced to one per frame.
-- **Touch (phones and tablets).** Phones controlling desktops is a primary use, and a desktop shown on a phone is small, so v1 has **two touch modes**, switchable at any time:
-  - **Trackpad (the default on phones):** the viewer draws its own cursor over the video, and a finger moves it relatively, like a laptop trackpad, so the fingertip never hides the target and small targets can be hit. Tap clicks at the cursor, two-finger tap right-clicks, tap-and-drag drags, and a two-finger drag scrolls. The viewer still sends **absolute normalized positions** (the cursor's), so this needs no protocol change, and the host can't tell the modes apart.
-  - **Direct (the default on tablets):** a tap is a left click at the finger, a long press a right click, a one-finger drag a left-button drag, and a two-finger drag a scroll.
-  - In both, pinch zooms and pans the local view (it isn't sent), so a phone user can zoom in on part of a large desktop.
-- **Keys a soft keyboard lacks:** the widget offers an optional key bar (Esc, Tab, Ctrl, Alt, Cmd/Win, the arrows, function keys, and sticky modifiers) built on `viewer.key()` and `sendShortcut()`. Soft-keyboard typing goes by the text path.
-- **Keyboard:** a `Focus` node takes `HardwareKeyboard` events while the view has focus and control is active. In `auto` mode (§5.4) a `TextInputClient` (the delta client) is attached at the same time, so dead keys, IMEs and soft keyboards produce **committed text**, which goes as `Text`. Composing text shows only on the viewer, in a small overlay, until it's committed. Making the key path and the text path agree without sending a character twice is the hardest part of capture, and it differs per platform; M4 settles it with tests on every viewer platform (open question 11).
+- **Pointer (mouse and trackpad):** `Listener` for down, move, up, hover and signals; buttons from Flutter's mouse button constants. Click counting: 500 ms and 6 px for a mouse, 300 ms and `kDoubleTapSlop` for touch. Presses on the letterbox aren't sent, nor are their drags or releases; drags past the edge are clamped to it. Scroll signals and trackpad pans become pixel `Wheel` messages **coalesced to at most 30 a second** with fractions carried over, so a trackpad stays under the host's event rate (§6.4). Measured overhead: about 0.03 ms per hover event in a debug VM, against the 2 ms target.
+- **Touch (phones and tablets).** Phones controlling desktops is a primary use, and a desktop shown on a phone is small, so there are **two touch modes**, switchable at any time:
+  - **Trackpad (the default on phones, `shortestSide < 600`):** the widget draws its own cursor over the video (or `cursorBuilder`'s), and a finger moves it relatively, like a laptop trackpad, so the fingertip never hides the target. Gain is 1.25× the picture's on-screen size (`trackpadSpeed`), up to 2× more for fast swipes. Tap clicks at the cursor at once (no delay), double tap double-clicks, two-finger tap right-clicks, tap-then-drag drags (a fresh press, which **a Windows host may read as a double-click-drag** with the tap before it: open question 6), and a two-finger drag scrolls. The viewer still sends **absolute normalized positions** (the cursor's), so the host can't tell the modes apart.
+  - **Direct (the default elsewhere):** a tap is a left click at the finger, a long press a right click, a one-finger drag a left-button drag, a two-finger tap a right click, and a two-finger drag a scroll. A stylus always works directly.
+  - **Pinch** zooms and pans the local view up to 8× (it isn't sent; `allowZoom`), and the view follows the trackpad cursor when zoomed. Two fingers are a pinch once their gap changes by more than 24 px and more than their midpoint has moved; that's locked until they lift.
+- **The key bar** has the keys a soft keyboard lacks: Esc, Tab, sticky Ctrl, Alt, Shift and Cmd/Win (tap to latch for the next key, again to lock), arrows, Home/End/Page Up/Down, Delete and F1–F12 (arrows and Delete repeat while held), a button for the soft keyboard, and a **Send keys** menu per host (Alt+Tab, Win, Ctrl+Esc, Alt+F4 on Windows; Cmd+Tab, Cmd+Space on a Mac; never Ctrl+Alt+Del, which can't be injected). Labels follow the host (`viewer.hostPlatform`). Because the host applies its modifier mapping, the bar swaps Control and Meta itself before sending, assuming the host's default `ModifierMapping.auto` (its `hostModifierMapping` parameter says otherwise), so keys arrive as labelled. With a sticky Ctrl, Alt or Meta, soft-keyboard text becomes US-layout key presses, so sticky Ctrl then "c" is Ctrl+C.
+- **Keyboard (open question 11, answered in code; devices pending).** Every Flutter platform gives a key event to the framework first, and the platform's text input gets it only if the framework didn't handle it. So the widget routes each key down once:
+  - A key routed **physically** is sent and returned `handled`; the text input never sees it.
+  - A **printable** key (per §5.4's modes) returns `skipRemainingHandlers`: the framework reports it unhandled, and the platform commits it to the widget's **delta text-input client**, which diffs committed text against a placeholder buffer and sends only the change as `Text`. **Deletions** become Backspace presses, and **line breaks and input actions** become Enter.
+  - **Composing** text (IMEs, dead keys) is held back and shown only on the viewer, in a small overlay, until it's committed; while composing, every key goes to the IME (and the web's `Process` key always does).
+  - Per platform: on **desktop** embedders, unhandled keys are redispatched to the text input (`insertText`, `WM_CHAR`) and queued in order, so committed text arrives before a later Shift release. On the **web**, the engine reports every key unhandled, and `preventDefault` follows the framework's reply before the browser's default, so handled keys never reach the hidden textarea; the exception is that the engine performs the input action on every Enter keydown, so an action while a hardware Enter is held is ignored. On **iOS**, hardware keys reach UIKit's text input only while the soft keyboard is shown; soft Backspace arrives as a deletion and Return as `\n`. On **Android**, soft keyboards commit text through the input connection and send Backspace (often Enter) as key events, which go physically; some keyboards (Samsung) commit a word at a time.
+  - **Limitations:** a hardware keyboard on a phone with the soft keyboard hidden sends each key's own character, so dead keys and IMEs don't work there. The zoom offset isn't re-clamped when the widget resizes (a soft keyboard pushing the layout up) until the next gesture.
 - **Leaving capture:** the view releases keyboard focus on a configurable `releaseShortcut`, and sends `ReleaseAll` whenever it loses focus.
 - **Latency:** `viewer.stats` keeps the round-trip time from `Ping`/`Pong`.
 
@@ -439,7 +450,7 @@ What the app gets from the package to build its consent experience: `ControlSess
 
 ## 10. Public API sketch
 
-M1 settled these names; the widget's are still proposals for M4. Style follows `cloudflare_realtime`'s: a getter for the value now, a `…Changes` stream that replays it, `…Options` for option classes, `final` value types and `sealed` state and exception roots.
+These names are built (M1–M4). Style follows `cloudflare_realtime`'s: a getter for the value now, a `…Changes` stream that replays it, `…Options` for option classes, `final` value types and `sealed` state and exception roots.
 
 ```dart
 import 'package:remote_input/remote_input.dart';
@@ -480,6 +491,11 @@ session.stop();                                     // synchronous; also RemoteI
 final viewer = RemoteInputViewer(link: link);
 viewer.stateChanges.listen(updateControlBadge);
 viewer.click(const Offset(0.5, 0.5));               // normalized; or let the widget do it
+final capture = RemoteInputCaptureController();
+RemoteInputCapture(viewer: viewer, controller: capture, child: videoView);
+RemoteKeyBar(viewer: viewer, controller: capture);  // phones
+viewer.hostPlatform;                                // label Cmd or Win
+await RemoteInputPermissions.status();              // macOS onboarding (granted, denied, notRequired, unsupported)
 RemoteInputCapture(viewer: viewer, contentSize: videoSize, child: videoView);
 await viewer.close();
 
@@ -543,10 +559,11 @@ For the agent building the package to resolve. Record each answer here (and in t
 8. ~~**`win32` or own bindings.**~~ **Answered (M2):** own bindings (§7.2).
 9. ~~**Pixel wheel deltas on Windows.**~~ **Answered (M2):** 100/3 px per line, accumulated (§7.2). Check the feel on a device.
 10. **macOS event source and flags.** **Answered (M3), one device check:** `.privateState`, flags set explicitly on every event, cleared on text (§7.3). To verify: a key event's Unicode string isn't recomputed when its flags change, so Shift+A relies on the receiving app translating the key code with the flags; the integration test expects `aA`.
-11. **Viewer keyboard capture per platform:** how Flutter's `HardwareKeyboard` and a text-input client interact on each viewer platform (desktop, web, phones with soft keyboards), and how `auto` mode avoids sending a character twice or not at all.
+11. **Viewer keyboard capture per platform.** **Answered in code (M4), device checks pending** (§8, `docs/checkpoint.md` B3): physical keys `handled`, printable keys `skipRemainingHandlers` into a delta text client.
 12. **Message authentication and confidentiality:** is an optional HMAC worth having for transports without peer authentication, or is that the transport's job? And, since an SFU forwards a channel to every subscriber (§9), should the package offer optional end-to-end encryption of input with a key the app exchanges over its authenticated signaling (AES-GCM, which would add a crypto dependency)? Until decided, the consumer restricts subscriptions on its server.
 13. **CI injection tests on Windows:** can GitHub's Windows runners inject into a window (they need an interactive desktop)? If not, the Windows checks stay on a real machine.
-14. **The example's video:** the example has no video stack. Is a surface placeholder with the right aspect ratio enough for the demo, or should it stream low-rate screenshots, or depend on `cloudflare_realtime` in a second example?
+14. ~~**The example's video.**~~ **Answered (M6):** a placeholder with the host's aspect ratio, pixel size and a grid is enough for the two-machine demo (you watch the host's screen beside you), and the one-machine demo draws a virtual desktop from the injected events. A video example on `cloudflare_realtime` would bring WebRTC into the example and belongs to the consumer; the reference adapter is in `example/cloudflare_realtime_adapter/`.
 15. **Long text:** pasting a long text through the text path is slow at 200 characters a second. Is that acceptable, given that clipboard sync is out of scope?
 16. **Platform tags on pub.dev:** the plugin declares only Windows and macOS, so pub.dev will list only those, though the viewer runs everywhere. Declare Dart-only implementations for the other platforms (`dartPluginClass`) so they're listed?
-17. **The Swift package's identity when the directory isn't `remote_input`.** Flutter links the plugin's Swift package under the plugin's directory name (`flutter-remote-input` in a clone; `flutter-remote-input-<hash>` in pub's git cache, which is how consumers pin it). The CI runner's Xcode (macOS 26 image) refused that: "unable to override package 'remote_input' because its identity 'flutter-remote-input' doesn't match", so CI checks out into `remote_input`. Xcode 27.1 accepts it. **Answered (M3):** Xcode 27.1 refuses it too; the cause was the example's own `Runner.xcodeproj`, whose file reference to `../../../macos/remote_input` (the plugin template's "edit the plugin in Xcode" link) is a local package override named after its directory. With it removed, the example builds from any directory name. Consumers' Runner projects have no such reference, so a git pin or a hosted copy works like any plugin. CI's `path: remote_input` workaround can probably go (confirm with a run on Xcode 26).
+17. **The Swift package's identity when the directory isn't `remote_input`.** Flutter links the plugin's Swift package under the plugin's directory name (`flutter-remote-input` in a clone; `flutter-remote-input-<hash>` in pub's git cache, which is how consumers pin it). The CI runner's Xcode (macOS 26 image) refused that: "unable to override package 'remote_input' because its identity 'flutter-remote-input' doesn't match", so CI checks out into `remote_input`. **Answered (M3):** Xcode 27.1 refuses it too; the cause was the example's own `Runner.xcodeproj`, whose file reference to `../../../macos/remote_input` (the plugin template's "edit the plugin in Xcode" link) is a local package override named after its directory. With it removed, the example builds from any directory name. Consumers' Runner projects have no such reference, so a git pin or a hosted copy works like any plugin. CI's `path: remote_input` workaround can probably go (confirm with a run on Xcode 26).
+18. **The viewer can't know the host's `ModifierMapping`.** The key bar assumes `auto`. Options for a later version: announce the mapping in `HostState` or a `HostHello` capability bit, or have the key bar send with `KeyModifiers.unmapped` (added in M1) and its own swap.

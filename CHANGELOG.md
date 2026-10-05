@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Feature complete in code; device checks pending** (docs/checkpoint.md).
+- **M2: Windows host.** `SendInput` through the package's own FFI bindings: absolute moves exact at every pixel of the virtual desktop, buttons, both wheel axes, scan-code keys and Unicode text; displays and window surfaces with per-monitor DPI, occlusion and focus; UIPI and secure-desktop detection; a native low-level-hook thread so local input pauses control.
+- **M3: macOS host.** `CGEventPost` from a private-state source through `@_cdecl` Swift and FFI: moves, drags, click state, pixel and line scrolling, keys with explicit flags, Unicode text; displays and window surfaces with occlusion and focus; Secure Event Input and inactive-session detection; local input from the HID event counters; `RemoteInputPermissions` for Accessibility onboarding. The example builds from any directory name (open question 17).
+- **M4: viewer capture.** `RemoteInputCapture`, `RemoteInputCaptureController` and `RemoteKeyBar`: letterbox-aware mapping, mouse and trackpad with click counting and wheel coalescing, touch in trackpad (default on phones) and direct modes with pinch zoom, and keyboard capture in `auto`, `physical` and `text` modes through a delta text-input client (dead keys, IMEs, soft keyboards).
+- **M5: safety.** `RemoteInputHost.limitations` (`HostLimitation`), `BlockReason.windowNotInFront` (keys only), and the native detectors above.
+- **M6: example.** A one-machine demo on every platform, two-machine control over a development WebSocket link with pairing and consent, a reference `cloudflare_realtime` adapter, and the runbook `docs/checkpoint.md`.
+- **Protocol and API additions:** the host re-sends `HostHello` until answered; `RemoteInputViewer.hostPlatform`, `platform`, `ViewerOptions.hostTimeout` (`StopReason.timedOut`), round-trip percentiles; `KeyModifiers.unmapped` and `sendShortcut(mapModifiers: false)`.
+
 - **M1: protocol, codec and the Dart core.**
   - The v1 wire codec, with golden-byte tests for every message type and a fuzz run of a million inputs. `PointerMove` carries `reliableSeq`, so a move never overtakes the click before it (docs/design.md §5.3).
   - `InputLink` and `InputChannel`, the transport interface.
