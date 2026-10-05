@@ -221,22 +221,59 @@ bool macosIsOccluded(Offset point, MacosWindowInfo window) {
   return false;
 }
 
+/// Whether the frontmost window at [point] in [windows] (on screen, front
+/// to back) belongs to process [ownPid], so the viewer would operate the
+/// host app itself: its consent dialog or its Stop button (review H1).
+///
+/// Only windows that [macosIsOccluded] would count are considered: levels
+/// 0–19 with alpha above 0. So a window of the host app at level 20 or
+/// above (a border at `.statusBar`) never blocks the pointer, and controls
+/// there aren't protected. A click-through window of another app above the
+/// host's own window (one that ignores mouse events but isn't transparent)
+/// hides it from this check, because the window list can't tell which
+/// windows take clicks.
+bool macosIsOwnWindowAt(
+  Offset point,
+  List<MacosWindowRecord> windows,
+  int ownPid,
+) {
+  for (final w in windows) {
+    if (w.layer < 0 || w.layer >= macDockWindowLevel) continue;
+    if (w.alpha <= 0) continue;
+    if (w.bounds.contains(point)) return w.ownerPid == ownPid;
+  }
+  return false;
+}
+
+/// Whether one of [panelPids] (apps whose non-activating panels take
+/// keystrokes: Spotlight) shows a window in [windows], the on-screen list,
+/// at any level, so keys typed now would go to that panel instead of the
+/// frontmost app (review M4).
+///
+/// A panel's window level isn't checked: Spotlight's couldn't be read
+/// without opening it, and it shows no other window. Its bounds aren't
+/// either: keys go to the panel wherever it is.
+bool macosKeyboardPanelOpen(
+  List<MacosWindowRecord> windows,
+  List<int> panelPids,
+) {
+  for (final w in windows) {
+    if (w.alpha > 0 && panelPids.contains(w.ownerPid)) return true;
+  }
+  return false;
+}
+
 /// Displays and windows on macOS, in global display points.
 ///
 /// Window bounds and the windows above a shared window are read with
 /// `CGWindowListCopyWindowInfo` (about 0.13 ms for one window and 0.1 to
 /// 0.3 ms for the windows above it, measured on macOS 27) and cached for
 /// [windowCacheLifetime], so pointer moves at 250 Hz cost at most 20 reads
-/// a second (open question 4). Displays are cached until the display
-/// configuration changes, or for [displayCacheLifetime].
+/// a second (open question 4). The whole on-screen list, for
+/// [isOwnWindowAt], is cached the same way (0.3 to 0.6 ms a read). Displays
+/// are cached until the display configuration changes, or for
+/// [displayCacheLifetime].
 final class MacosSurfaceResolver implements SurfaceResolver {
-  // TODO(review H1): own-process checks; stubs until the macOS fix lands.
-  @override
-  bool isOwnWindowAt(Offset point) => false;
-
-  @override
-  bool isOwnAppInFront() => false;
-
   /// Creates a resolver over [native].
   MacosSurfaceResolver(
     this._native, {
@@ -258,6 +295,12 @@ final class MacosSurfaceResolver implements SurfaceResolver {
   int? _windowId;
   Duration? _windowAt;
   MacosWindowInfo? _window;
+
+  Duration? _screenAt;
+  List<MacosWindowRecord>? _screen;
+
+  Duration? _panelsAt;
+  List<int> _panelPids = const [];
 
   List<DisplayInfo>? _displays;
   Duration? _displaysAt;
@@ -284,13 +327,58 @@ final class MacosSurfaceResolver implements SurfaceResolver {
     return info != null && info.onScreen && !macosIsOccluded(point, info);
   }
 
+  /// Whether [surface]'s window is on screen, its app is
+  /// `NSWorkspace.frontmostApplication`, and no keyboard panel (Spotlight)
+  /// is open: such a panel takes keystrokes without becoming the frontmost
+  /// app (review M4, [macosKeyboardPanelOpen]).
   @override
   bool hasKeyboardFocus(SharedSurface surface) {
     if (surface is! WindowSurface) return true;
     final info = _windowInfo(surface.handle);
     return info != null &&
         info.onScreen &&
-        _native.frontmostPid() == info.ownerPid;
+        _native.frontmostPid() == info.ownerPid &&
+        !_keyboardPanelOpen();
+  }
+
+  bool _keyboardPanelOpen() {
+    final at = _panelsAt;
+    final List<int> pids;
+    if (at != null && !_expired(at, windowCacheLifetime)) {
+      pids = _panelPids;
+    } else {
+      _panelsAt = _watch.elapsed;
+      pids = _panelPids = _native.keyboardPanelPids();
+    }
+    // Usually nothing to look for: Spotlight starts on demand.
+    if (pids.isEmpty) return false;
+    final windows = _onScreenWindows();
+    if (windows == null) return true;
+    return macosKeyboardPanelOpen(windows, pids);
+  }
+
+  /// Whether the frontmost window at [point], among levels 0–19 with alpha
+  /// above 0 (as for occlusion: [macosIsOccluded]), belongs to this
+  /// process. The on-screen window list is cached for
+  /// [windowCacheLifetime], like a shared window's. If the list can't be
+  /// read, the answer is true: the point might be on the host's own
+  /// controls.
+  @override
+  bool isOwnWindowAt(Offset point) {
+    final windows = _onScreenWindows();
+    if (windows == null) return true;
+    return macosIsOwnWindowAt(point, windows, _native.ownPid);
+  }
+
+  /// Whether this process is `NSWorkspace.frontmostApplication`.
+  @override
+  bool isOwnAppInFront() => _native.frontmostPid() == _native.ownPid;
+
+  List<MacosWindowRecord>? _onScreenWindows() {
+    final at = _screenAt;
+    if (at != null && !_expired(at, windowCacheLifetime)) return _screen;
+    _screenAt = _watch.elapsed;
+    return _screen = _native.onScreenWindows();
   }
 
   SurfaceGeometry? _displayGeometry(int id) {

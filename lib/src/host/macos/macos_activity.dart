@@ -4,9 +4,19 @@
 // The monitor polls the HID system's event counters
 // (`CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, …)`)
 // about every 10 ms. A key down, a modifier change, a button down or a
-// scroll counted since the last poll is local input. Moves count only once
-// the pointer is more than a threshold away from where it last was, or
-// from where the package last put it, to ignore sensor jitter.
+// scroll counted since the last poll is local input. Pointer movement
+// counts in either of two ways:
+//
+// - **Sustained hardware moves** (review M2): at least
+//   [MacosActivityDetector.minMoveEvents] HID moves within
+//   [MacosActivityDetector.moveWindow], seen in at least two polls,
+//   wherever the pointer is. The package's own moves aren't in the HID
+//   counts, so this works while a viewer streams moves at 250 Hz, which
+//   keep putting the pointer back where the viewer wants it.
+// - **Distance:** the pointer is more than a threshold from where it last
+//   was, or from where the package last put it. This catches slow movement
+//   that reports too few events for the first rule, while the viewer isn't
+//   moving the pointer.
 //
 // Why the HID state: `CGEventSource.h` says that table "reflects the
 // combined state of all hardware event sources posting from the HID
@@ -16,7 +26,7 @@
 // Monitoring permission is needed. That's verified on a device by
 // example/integration_test/macos_injection_test.dart; if it turns out
 // wrong, [MacosActivityDetector.ownEventsReachHidState] subtracts the
-// package's own events instead.
+// package's own events instead, for both movement rules.
 
 import 'dart:collection';
 import 'dart:ui' show Offset;
@@ -30,12 +40,16 @@ final class MacosActivityDetector {
   ///
   /// [moveThreshold] is how far, in points, the pointer must move to count
   /// (`docs/design.md` §6.3: 4). [anchorReset] is how long without local
-  /// movement before small movements stop adding up. With
-  /// [ownEventsReachHidState], the package's own posted events are
-  /// subtracted from the HID counts, each for up to [ownEventWindow].
+  /// movement before small movements stop adding up. [minMoveEvents]
+  /// hardware moves within [moveWindow] count as local movement wherever
+  /// the pointer is. With [ownEventsReachHidState], the package's own
+  /// posted events are subtracted from the HID counts, each for up to
+  /// [ownEventWindow].
   MacosActivityDetector({
     this.moveThreshold = 4,
     this.anchorReset = const Duration(milliseconds: 250),
+    this.minMoveEvents = 3,
+    this.moveWindow = const Duration(milliseconds: 100),
     this.ownEventsReachHidState = false,
     this.ownEventWindow = const Duration(milliseconds: 250),
   });
@@ -46,6 +60,20 @@ final class MacosActivityDetector {
   /// How long without local pointer movement before the reference point
   /// follows the pointer, so jitter spread over time doesn't add up.
   final Duration anchorReset;
+
+  /// How many hardware pointer moves within [moveWindow], seen in at least
+  /// two polls, count as local movement wherever the pointer is.
+  ///
+  /// A mouse reports at 125 to 1000 Hz while it moves, and a trackpad at
+  /// about 60 to 120 Hz, so a deliberate movement reaches 3 within about
+  /// 25 ms (a 125 Hz mouse) to 50 ms (a slow trackpad), inside the 100 ms
+  /// target. A single report from a bumped desk or a resting hand doesn't,
+  /// and requiring two polls ignores a short burst from a 1000 Hz mouse
+  /// that lands in one poll.
+  final int minMoveEvents;
+
+  /// The window [minMoveEvents] are counted in.
+  final Duration moveWindow;
 
   /// Whether events the package posts appear in the HID system's counts.
   /// Expected false (see the file comment); true subtracts them.
@@ -59,6 +87,7 @@ final class MacosActivityDetector {
   Offset? _anchor;
   Offset? _injectedPoint;
   Duration? _lastLocalMove;
+  final ListQueue<(Duration, int)> _recentMoves = ListQueue();
   final List<ListQueue<(Duration, int)>> _pending = List.generate(
     5,
     (_) => ListQueue(),
@@ -74,6 +103,7 @@ final class MacosActivityDetector {
     _anchor = null;
     _injectedPoint = null;
     _lastLocalMove = null;
+    _recentMoves.clear();
     for (final q in _pending) {
       q.clear();
     }
@@ -105,12 +135,17 @@ final class MacosActivityDetector {
       _injectedPoint = null;
     }
 
+    final moves = local[4];
+    final sustained = _noteMoves(moves, now);
+
     final keysOrButtons = local[0] + local[1] + local[2] + local[3];
-    if (keysOrButtons > 0) {
+    if (keysOrButtons > 0 || sustained) {
       _anchor = snapshot.pointer;
+      if (moves > 0) _lastLocalMove = now;
+      _recentMoves.clear();
       return true;
     }
-    if (local[4] > 0) {
+    if (moves > 0) {
       // Measured from the anchor: where the pointer was before this burst
       // of movement (set below while it was still), or where the package
       // last put it. Small moves add up until they pass the threshold.
@@ -118,6 +153,7 @@ final class MacosActivityDetector {
       final anchor = _anchor ??= snapshot.pointer;
       if ((snapshot.pointer - anchor).distance > moveThreshold) {
         _anchor = snapshot.pointer;
+        _recentMoves.clear();
         return true;
       }
       return false;
@@ -127,6 +163,22 @@ final class MacosActivityDetector {
       _anchor = snapshot.pointer;
     }
     return false;
+  }
+
+  /// Records [moves] hardware moves seen at [now], and returns whether the
+  /// moves within [moveWindow] are sustained movement.
+  bool _noteMoves(int moves, Duration now) {
+    if (moves > 0) _recentMoves.add((now, moves));
+    while (_recentMoves.isNotEmpty &&
+        now - _recentMoves.first.$1 > moveWindow) {
+      _recentMoves.removeFirst();
+    }
+    if (_recentMoves.length < 2) return false;
+    var total = 0;
+    for (final (_, count) in _recentMoves) {
+      total += count;
+    }
+    return total >= minMoveEvents;
   }
 
   int _subtractOwn(int kind, int hid, int own, Duration now) {
