@@ -5,7 +5,8 @@
 //   VM can't overwrite the error in between.
 // - The local-activity monitor (docs/design.md §6.3): low-level mouse and
 //   keyboard hooks on a dedicated thread with its own message loop, counting
-//   input the package didn't inject.
+//   input the package didn't inject, with a heartbeat and periodic
+//   re-hooking so a hook Windows removed is noticed.
 // - The tag every injected event carries in dwExtraInfo.
 
 #ifndef FLUTTER_PLUGIN_REMOTE_INPUT_NATIVE_H_
@@ -36,17 +37,32 @@ REMOTE_INPUT_NATIVE_EXPORT uint32_t remote_input_send_input(uint32_t count,
                                                             int32_t size,
                                                             uint32_t* error);
 
-// Starts the hook thread if it isn't running, and waits until its hooks are
-// installed. Returns 1 if they are, 0 if they couldn't be. Idempotent.
+// Starts the hook thread if it isn't running (or has exited), and waits
+// until its hooks are installed. Returns 1 if they are, 0 if they couldn't
+// be. Idempotent: with the thread running, returns whether its hooks are
+// installed now.
 REMOTE_INPUT_NATIVE_EXPORT int32_t remote_input_activity_start(void);
 
 // Stops the hook thread and removes its hooks. Idempotent.
 REMOTE_INPUT_NATIVE_EXPORT void remote_input_activity_stop(void);
 
 // Local input events seen since the DLL loaded: every key and button event
-// and wheel notch not tagged by this process, and every untagged pointer
-// movement more than 4 pixels from the last reference point. Only grows.
+// and wheel notch not tagged by this process, every burst of untagged
+// pointer movement past 4 pixels of travel (see MouseHook in the .cpp), and
+// every stall of the hook thread (input in it may have gone unseen). Only
+// grows.
 REMOTE_INPUT_NATIVE_EXPORT uint64_t remote_input_activity_count(void);
+
+// 1 while the hook thread runs with both hooks installed by its last
+// (re)install, 0 otherwise. Windows removes low-level hooks silently, so
+// this alone doesn't prove they're alive: read the heartbeat too.
+REMOTE_INPUT_NATIVE_EXPORT int32_t remote_input_activity_hooks_installed(void);
+
+// Milliseconds since the hook thread's message loop last handled its
+// heartbeat timer (every 100 ms), or -1 if the thread isn't running. A
+// large value means the thread is stuck, and Windows may have removed its
+// hooks.
+REMOTE_INPUT_NATIVE_EXPORT int64_t remote_input_activity_heartbeat_age(void);
 
 #if defined(__cplusplus)
 }  // extern "C"

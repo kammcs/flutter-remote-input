@@ -37,6 +37,22 @@ TEST(RemoteInputNative, ActivityStartsAndStopsIdempotently) {
   remote_input_activity_stop();
 }
 
+TEST(RemoteInputNative, HealthFollowsTheHookThread) {
+  EXPECT_EQ(remote_input_activity_hooks_installed(), 0);
+  EXPECT_EQ(remote_input_activity_heartbeat_age(), -1);
+  ASSERT_EQ(remote_input_activity_start(), 1);
+  EXPECT_EQ(remote_input_activity_hooks_installed(), 1);
+  // The heartbeat ticks every 100 ms while the loop runs.
+  Sleep(350);
+  EXPECT_EQ(remote_input_activity_hooks_installed(), 1);
+  const int64_t age = remote_input_activity_heartbeat_age();
+  EXPECT_GE(age, 0);
+  EXPECT_LT(age, 300);
+  remote_input_activity_stop();
+  EXPECT_EQ(remote_input_activity_hooks_installed(), 0);
+  EXPECT_EQ(remote_input_activity_heartbeat_age(), -1);
+}
+
 TEST(RemoteInputPlugin, Constructs) { RemoteInputPlugin plugin; }
 
 }  // namespace test
