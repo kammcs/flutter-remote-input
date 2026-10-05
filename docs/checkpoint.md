@@ -3,6 +3,7 @@
 The checks that need two machines and a person: the [consumer checkpoint](roadmap.md#consumer-checkpoint-week-4) and the [success criteria](roadmap.md#success-criteria) that tests can't cover. Run them with the example app ([example/README.md](../example/README.md)) and record the results at the [end of this file](#results).
 
 - **Part A** is the week-4 checkpoint: pointer, keys, stop and local input, in both directions between Windows and macOS.
+- **Part C** comes first on a new build: the device checks for each host platform (Windows injection, the macOS permission, injection test and App Sandbox test).
 - **Part B** is the rest of the success criteria for 0.1.0: every viewer platform, mixed DPI, layouts and IMEs, latency, and the timing of local input and stop.
 - The example's WebSocket link is the transport here. The checkpoint itself passes over the first consumer's call DataChannels, which its own team runs with the same steps; the [`cloudflare_realtime` adapter](../example/cloudflare_realtime_adapter/README.md) is the reference for that.
 
@@ -86,7 +87,7 @@ Run A1–A3 twice: **Windows viewer → Mac host**, and **Mac viewer → Windows
 
 1. Remove the example from Accessibility (System Settings → Privacy & Security → Accessibility), and start it.
 2. **Host this computer** shows **Allow this app to control the computer**. Grant it, then **Check again**: the display picker and **Start listening** appear. Note whether a relaunch was needed.
-3. The App Sandbox answer comes from M3's test ([design.md §7.3](design.md#73-macos)); record it here when it's in.
+3. The App Sandbox answer comes from [C3](#c3-macos-the-app-sandbox-test-design-73-open-question-1); record it here when it's in.
 
 ## B. Success criteria (for 0.1.0)
 
@@ -136,6 +137,44 @@ Then copy, paste, select all and undo in each direction. **Pass:** the text arri
 ### B6. Instant stop, timed
 
 As A3 step 1, recorded as in B5: from **Stop** to the release of everything held. **Pass:** nothing is injected after Stop except releases, within 50 ms. Repeat by quitting the host app (it calls `RemoteInputHost.stopAll()`).
+
+## C. Device checks for the host platforms
+
+The Windows and macOS hosts are built and unit-tested; these are the checks that need the real OS. Part A needs them to pass first.
+
+### C1. Windows
+
+Built and unit-tested on macOS; the native C++ was compile-checked with mingw-w64. Nothing here has run on Windows yet. Run on a Windows machine with the example built from this repo.
+
+1. Build the example. Run `remote_input_test.exe` (gtest), then, with the machine idle, `flutter test integration_test/windows_injection_test.dart -d windows`.
+2. Coordinates (design §3.2, open question 3): every corner and the centre land exactly, by Flutter's position and by `GetCursorPos`, in both placements (absolute and the `SetCursorPos` fallback). Repeat on a mixed-DPI rig (100 % and 150 %) with a monitor left of or above the primary.
+3. Captured content vs bounds (§3.3): compare `DWMWA_EXTENDED_FRAME_BOUNDS` with what the screen capturer captures for a window; calibrate default `contentInsets`.
+4. Local input wins (§6.3): pause within 50 ms (the test prints it). The package's own events, its `SetCursorPos` fallback, and the left Ctrl Windows synthesizes for an injected AltGr must not pause the session.
+5. Secure contexts (§6.5): keys and pointer blocked over an admin app (Task Manager), both by the integrity check and by `SendInput` refusing. UAC, Ctrl+Alt+Del and the lock screen show `secureDesktop` (check whether Win+L leaves the input desktop as `Default`). AppContainer/Store apps are not reported as elevated.
+6. §7.2: back/forward buttons reach Flutter; both wheel axes scroll and feel right; extended keys (arrows, right Ctrl) and media keys work by scan code; emoji (surrogate pairs) type correctly.
+7. `RemoteInputHost.isSupported` is true in the example, and `checkAvailable()` is `null` under Flutter's PerMonitorV2 manifest.
+
+### C2. macOS: the Accessibility grant and the injection test
+
+Only when the machine is free: the test moves the real pointer and types real keys, into its own window only.
+
+1. `cd example && flutter build macos --debug` (builds `example/build/macos/Build/Products/Debug/remote_input_example.app`, ad-hoc signed).
+2. In System Settings → Privacy & Security → Accessibility, add and turn on **the terminal you run `flutter test` from** (Flutter launches the app's binary directly, so macOS credits the terminal) and **the `.app` above**. A rebuilt ad-hoc debug app can lose its grant; re-add it, or sign with your team.
+3. `flutter test integration_test/macos_injection_test.dart -d macos`, hands off for about 20 seconds. Expect 2 passing tests: corners and centre within 1 point, clicks, right click, double click, drag, pixel and line scrolling, `a`, Shift+`A`, Backspace, Command+A, Unicode text and Enter, and **no pause caused by the package's own events** (open question 2).
+4. If it fails at the permission check, the grant went to the other entry. At "The package's own events paused the session", switch `MacosLocalActivity`'s detector in `lib/src/host/macos/macos_host.dart` to `MacosActivityDetector(ownEventsReachHidState: true)` and re-run. At `aA` (you get `aa`), open question 10's premise is wrong: report it.
+5. Afterwards, remove the terminal's grant if you don't want to keep it.
+
+### C3. macOS: the App Sandbox test (design §7.3, open question 1)
+
+Preparation: open `example/macos/Runner.xcworkspace`; on the Runner target set your Team (Apple Development certificate) and add **Hardened Runtime**; leave App Sandbox on (both entitlements files are sandboxed). **Don't commit the team ID.** Then `cd example && flutter build macos --release -t lib/macos_check.dart`, check `codesign -dv --entitlements - build/macos/Build/Products/Release/remote_input_example.app` shows `flags=0x10000(runtime)`, `app-sandbox` true and an Apple Development authority, and remove old `remote_input_example` entries from the Accessibility list. Record the macOS build and each result:
+
+1. **Prompt and grant:** `open build/macos/Build/Products/Release/remote_input_example.app` (so the app is its own TCC client). The page shows `denied`. **Request permission**: the system prompt names the app; enable it in Settings. Note whether the status turns `granted` within about a second without relaunching (design §7.3's open point). Requesting again shows no prompt.
+2. **Events reach other apps on every display:** with a TextEdit document in front, **Type a line into the front app** and switch to TextEdit within 5 s: expect `remote_input check: héllo wörld 👋 0123456789` and a newline. Repeat in Safari's address bar and a Finder rename. Put a TextEdit window over the centre of each display and **Click the centre of each display**.
+3. **Bounds, frontmost app, secure input and session can be read:** **Type into this window** and click the page's field: the text arrives. Repeat but switch apps during the countdown: the log shows `dropped {notFocused: …}`. Click the page's password field, press the button and click the field again: `SessionBlocked(secureInput)` (if Flutter's obscured field doesn't turn on Secure Event Input, use Terminal → Secure Keyboard Entry with Terminal in front). **Circle**, lock with Ctrl-Cmd-Q, unlock: `SessionBlocked(sessionInactive)`.
+4. **Local input wins:** **Circle for 8 s**, nudge the mouse once: `SessionPaused(localInput)`, the circle stops, then `SessionActive` about 1.5 s after you let go. A key pauses it too. No pause while you don't touch anything.
+5. **Without the sandbox, for comparison:** remove App Sandbox locally, rebuild, re-grant if asked, repeat 1–4.
+
+The answer goes into [design.md §7.3](design.md#73-macos), the README's macOS section, and to the first consumer.
 
 ## Results
 
