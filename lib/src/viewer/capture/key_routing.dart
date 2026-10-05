@@ -3,6 +3,8 @@
 /// apart from any platform.
 library;
 
+import 'package:flutter/foundation.dart' show TargetPlatform;
+
 import '../../keys.dart';
 import '../../protocol/wire_types.dart';
 
@@ -16,9 +18,11 @@ enum KeyboardMode {
   /// shortcuts work. Modifier keys are sent physically; Caps Lock and Num
   /// Lock aren't sent, because the text carries the case.
   ///
-  /// AltGr characters (a character typed with Ctrl and Alt both held, as
-  /// Windows reports AltGr) go by text, so `@` on a German keyboard arrives
-  /// as `@` whatever the host's layout.
+  /// On Windows and Linux viewers (desktop or browser), AltGr characters (a
+  /// character typed with Ctrl and Alt both held, as Windows reports AltGr)
+  /// go by text, so `@` on a German keyboard arrives as `@` whatever the
+  /// host's layout. Elsewhere Ctrl+Alt (Ctrl+Option on a Mac) is a shortcut
+  /// and goes physically.
   auto,
 
   /// Every key by position, lock keys included, and no text input. For
@@ -181,13 +185,23 @@ bool isPrintableCharacter(String? character) {
   return true;
 }
 
+/// Whether a character typed with Ctrl and Alt held on [platform] is an
+/// AltGr character: on Windows, which reports AltGr as Ctrl+Alt, and on
+/// Linux, whose layouts follow it (in a browser, [platform] is the OS the
+/// browser runs on). On Apple platforms and Android, Ctrl+Alt is a
+/// shortcut.
+bool ctrlAltIsAltGr(TargetPlatform platform) =>
+    platform == TargetPlatform.windows || platform == TargetPlatform.linux;
+
 /// Routes a key press (a down or repeat event) in [mode].
 ///
 /// [modifiers] is the [KeyModifiers] state the viewer holds, including
 /// sticky modifiers from a key bar. [composing] is true while the
 /// platform's input method has composing text, and [processKey] when the
 /// platform says an IME is handling the key (the web's `Process` key):
-/// then every key belongs to the IME.
+/// then every key belongs to the IME. [altGr] says whether a printable
+/// character typed with Ctrl and Alt is an AltGr character, which goes by
+/// text ([ctrlAltIsAltGr]).
 KeyRoute routeKeyDown({
   required KeyboardMode mode,
   required int usage,
@@ -195,6 +209,7 @@ KeyRoute routeKeyDown({
   required int modifiers,
   bool composing = false,
   bool processKey = false,
+  bool altGr = true,
 }) {
   if (mode == KeyboardMode.physical) return KeyRoute.physical;
   if (composing || processKey) return KeyRoute.platform;
@@ -214,7 +229,7 @@ KeyRoute routeKeyDown({
 
   if (control || meta) {
     // AltGr: Windows (and browsers on it) report it as Control and Alt.
-    if (control && alt && !meta && printable) return KeyRoute.text;
+    if (altGr && control && alt && !meta && printable) return KeyRoute.text;
     return KeyRoute.physical;
   }
   if (alt) {

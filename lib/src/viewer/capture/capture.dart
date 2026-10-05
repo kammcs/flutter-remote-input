@@ -52,6 +52,7 @@ import '../../keys.dart';
 import '../../protocol/wire_types.dart';
 import '../../session_state.dart';
 import '../viewer.dart';
+import 'context_menu.dart';
 import 'geometry.dart';
 import 'key_routing.dart';
 import 'text_bridge.dart';
@@ -94,8 +95,15 @@ enum TouchMode {
 /// Nothing is sent, and no gesture or scroll is taken from ancestors, while
 /// the viewer's session isn't active. Keys are captured only while the
 /// widget has focus (it takes focus when tapped or clicked); when it loses
-/// focus, or the session stops being active, everything held on the host is
-/// released.
+/// focus, the app stops being in the foreground (another window or app takes
+/// the keyboard, as Alt+Tab does), or the session stops being active,
+/// everything held on the host is released. Mouse buttons still held then
+/// aren't pressed again until they're let go.
+///
+/// On the web, the browser's context menu is turned off while a capture's
+/// session is active, so a right click goes to the host
+/// ([BrowserContextMenu]); it's turned back on when no capture needs it off,
+/// unless the app had turned it off itself.
 class RemoteInputCapture extends StatefulWidget {
   /// Creates a capture over [child].
   const RemoteInputCapture({
@@ -250,6 +258,7 @@ final class _ClaimRecognizer extends OneSequenceGestureRecognizer {
 }
 
 class _RemoteInputCaptureState extends State<RemoteInputCapture>
+    with WidgetsBindingObserver
     implements CaptureTextSink {
   // Timing and distances. The double-click interval is Windows' default
   // and close to macOS's; the slops are a few pixels for a mouse and
@@ -278,14 +287,18 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
   bool _active = false;
   String _composing = '';
   double _lastBottomInset = 0;
+  bool _holdsContextMenu = false;
 
   // Keys: what this capture holds on the host.
   final Set<int> _hostModifiers = {};
   final Set<int> _physicalDown = {};
 
-  // Mouse.
+  // Mouse. Ignored buttons are held locally but not on the host (pressed
+  // on the letterbox, or held through a release), until they're let go.
   int _remoteButtons = 0;
   int _ignoredButtons = 0;
+  int? _mouseDevice;
+  Offset _lastMousePoint = Offset.zero;
   final Map<PointerButton, int> _clickCounts = {};
   PointerButton? _lastClickButton;
   DateTime? _lastClickTime;
@@ -301,6 +314,8 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
   // Touch.
   final Map<int, _Finger> _fingers = {};
   _TouchPhase _phase = _TouchPhase.idle;
+  // The finger that started the gesture: only it drives a one-finger drag.
+  int? _driver;
   bool _touchDirect = false;
   bool _secondTap = false;
   int _tapCount = 0;
@@ -355,6 +370,8 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_onGlobalPointer);
     _attachController();
     _subscribe();
   }
@@ -362,9 +379,19 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // A soft keyboard the person dismissed (Android's back button, iOS's
-    // hide key) leaves the request standing: notice it going away.
-    final bottom = MediaQuery.maybeViewInsetsOf(context)?.bottom ?? 0;
+    _checkSoftKeyboard();
+  }
+
+  @override
+  void didChangeMetrics() => _checkSoftKeyboard();
+
+  /// Notices a soft keyboard the person dismissed (Android's back button,
+  /// iOS's hide key), which leaves the request standing. Reads the view's
+  /// own insets: a [Scaffold] removes them from the [MediaQuery] its body
+  /// sees.
+  void _checkSoftKeyboard() {
+    if (!mounted) return;
+    final bottom = View.maybeOf(context)?.viewInsets.bottom ?? 0;
     if (_softKeyboardPlatform &&
         _controller._keyboardRequested &&
         _lastBottomInset > 0 &&
@@ -376,6 +403,29 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
     _lastBottomInset = bottom;
   }
 
+  /// When another window or app takes the keyboard (Alt+Tab, Cmd+Tab, a
+  /// tablet's app switcher), the key-ups don't come here: release
+  /// everything. On desktops and the web, Flutter's focus manager also
+  /// takes focus away while the app is inactive, which releases it too; on
+  /// iPhone and iPad it doesn't. On Android, `inactive` alone is ignored:
+  /// some soft keyboards flicker the app through it while typing (which is
+  /// why Flutter's focus manager ignores it there too), and a release then
+  /// would drop latched sticky modifiers. Hidden or paused releases.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        break;
+      case AppLifecycleState.inactive:
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) break;
+        _releaseEverything(send: true);
+      case AppLifecycleState.hidden ||
+          AppLifecycleState.paused ||
+          AppLifecycleState.detached:
+        _releaseEverything(send: true);
+    }
+  }
+
   @override
   void didUpdateWidget(RemoteInputCapture oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -383,6 +433,7 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
       _releaseEverything(send: true, viewer: oldWidget.viewer);
       _unsubscribe();
       _subscribe();
+      _updateTextInput();
     }
     if (oldWidget.controller != widget.controller) _attachController();
     if (oldWidget.focusNode != widget.focusNode && widget.focusNode != null) {
@@ -405,9 +456,12 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(_onGlobalPointer);
     _releaseEverything(send: true);
     _text.detach();
     _unsubscribe();
+    _syncContextMenu(hold: false);
     _wheelTimer?.cancel();
     _longPressTimer?.cancel();
     if (_attachedController?._capture == this) {
@@ -438,6 +492,14 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
     _surfaceSubscription = widget.viewer.surfaceChanges.listen((_) {
       if (mounted) setState(() {});
     });
+    _syncContextMenu(hold: _active);
+  }
+
+  /// Keeps the browser's context menu off while this capture is active.
+  void _syncContextMenu({required bool hold}) {
+    if (hold == _holdsContextMenu) return;
+    _holdsContextMenu = hold;
+    hold ? CaptureContextMenu.acquire() : CaptureContextMenu.release();
   }
 
   void _unsubscribe() {
@@ -454,6 +516,7 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
     // The host releases everything when it stops being active.
     if (wasActive && !_active) _releaseEverything(send: false);
     if (wasActive != _active) _updateTextInput();
+    _syncContextMenu(hold: _active);
     setState(() => _state = state);
   }
 
@@ -468,8 +531,11 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
         _controller.stickyModifierBits != 0;
     _hostModifiers.clear();
     _physicalDown.clear();
+    // Buttons still held here aren't pressed again until they're let go
+    // (keys held through a release aren't either: their repeats and
+    // releases find nothing held).
+    _ignoredButtons |= _remoteButtons;
     _remoteButtons = 0;
-    _ignoredButtons = 0;
     _panZoomPoint = null;
     _wheelTimer?.cancel();
     _wheelTimer = null;
@@ -613,6 +679,17 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
   /// After a key, a click or text: latched sticky modifiers are used up.
   void _afterInput() => _controller._consumeOneShot();
 
+  /// Before a pointer press goes to the host: text being composed is
+  /// committed where the host's caret is now (as a click ends a
+  /// composition locally), and the buffer starts afresh, since the click
+  /// may move the caret.
+  void _beforePress() {
+    _flushWheel();
+    _text
+      ..finishComposing()
+      ..resetBuffer();
+  }
+
   // --- Keys ---------------------------------------------------------------
 
   int _viewerModifierBits() {
@@ -657,6 +734,7 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
       modifiers: _viewerModifierBits() | _controller.stickyModifierBits,
       composing: _text.isComposing,
       processKey: event.logicalKey == LogicalKeyboardKey.process,
+      altGr: ctrlAltIsAltGr(defaultTargetPlatform),
     );
     switch (route) {
       case KeyRoute.physical:
@@ -740,7 +818,7 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
     if (widget.enableKeyboard && !_focusNode.hasFocus) {
       _focusNode.requestFocus();
     }
-    if (!_active) return;
+    if (!_active) return _forgetReleasedButtons(event);
     switch (event.kind) {
       case PointerDeviceKind.touch:
         _touchDown(event, direct: _touchMode == TouchMode.direct);
@@ -754,7 +832,7 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
   }
 
   void _onPointerMove(PointerMoveEvent event) {
-    if (!_active) return;
+    if (!_active) return _forgetReleasedButtons(event);
     if (_fingers.containsKey(event.pointer)) {
       _touchMove(event);
     } else if (!_isTouchKind(event.kind)) {
@@ -765,21 +843,60 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
   void _onPointerUp(PointerUpEvent event) {
     if (_fingers.containsKey(event.pointer)) {
       _touchUp(event);
-    } else if (!_isTouchKind(event.kind) && _active) {
-      _mouseEvent(event);
+    } else if (!_isTouchKind(event.kind)) {
+      _active ? _mouseEvent(event) : _forgetReleasedButtons(event);
     }
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
     if (_fingers.containsKey(event.pointer)) {
-      _touchCancel(event);
-    } else if (!_isTouchKind(event.kind) && _active) {
-      _mouseEvent(event);
+      _cancelFinger(event.pointer);
+    } else if (!_isTouchKind(event.kind)) {
+      _active ? _mouseEvent(event) : _forgetReleasedButtons(event);
     }
   }
 
   void _onPointerHover(PointerHoverEvent event) {
-    if (_active) _mouseEvent(event);
+    if (!_active) return _forgetReleasedButtons(event);
+    if (_isTouchKind(event.kind)) {
+      _stylusHover(event);
+    } else {
+      _mouseEvent(event);
+    }
+  }
+
+  /// A device that leaves (a pen out of range, a mouse unplugged) lets go of
+  /// whatever it held. The [Listener] doesn't see removals, so this is a
+  /// global route; it ignores every other event.
+  void _onGlobalPointer(PointerEvent event) {
+    if (event is! PointerRemovedEvent) return;
+    if (_fingers.containsKey(event.pointer)) _cancelFinger(event.pointer);
+    if (_remoteButtons != 0 && event.device == _mouseDevice) {
+      _releaseMouseButtons(_remoteButtons, _lastMousePoint);
+    }
+    if (!_isTouchKind(event.kind)) _ignoredButtons = 0;
+  }
+
+  /// While the capture is passive, buttons let go stop being ignored, so
+  /// the next press after a release is sent.
+  void _forgetReleasedButtons(PointerEvent event) {
+    if (!_isTouchKind(event.kind)) _ignoredButtons &= _pressedButtons(event);
+  }
+
+  static int _pressedButtons(PointerEvent event) =>
+      event is PointerUpEvent || event is PointerCancelEvent
+      ? 0
+      : event.buttons & _mouseButtons;
+
+  /// A hovering pen moves the pointer and nothing else: its barrel button
+  /// (which Flutter reports as the secondary button) doesn't press a mouse
+  /// button, and a pen hovering while a gesture is under way isn't sent.
+  void _stylusHover(PointerHoverEvent event) {
+    if (_phase != _TouchPhase.idle || _remoteButtons != 0) return;
+    final n = _normalize(event.localPosition);
+    if (!isInsideUnit(n)) return;
+    _viewer.pointerMove(n);
+    _cursor.value = n;
   }
 
   static bool _isTouchKind(PointerDeviceKind kind) =>
@@ -802,35 +919,19 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
     final n = _normalize(event.localPosition);
     final inside = isInsideUnit(n);
     final clamped = clampToUnit(n);
-    final pressed = event is PointerUpEvent || event is PointerCancelEvent
-        ? 0
-        : event.buttons & _mouseButtons;
+    final pressed = _pressedButtons(event);
     _ignoredButtons &= pressed;
     final released = _remoteButtons & ~pressed;
     final added = pressed & ~_remoteButtons & ~_ignoredButtons;
 
-    if (released != 0) {
-      _flushWheel();
-      for (var bit = 1; bit <= released; bit <<= 1) {
-        final button = _buttonFor(released & bit);
-        if (button == null) continue;
-        _viewer.pointerButton(
-          clamped,
-          button,
-          down: false,
-          clickCount: _clickCounts[button] ?? 1,
-        );
-      }
-      _remoteButtons &= ~released;
-      if (_remoteButtons == 0) _afterInput();
-    }
+    if (released != 0) _releaseMouseButtons(released, clamped);
     if (added != 0) {
       if (_remoteButtons == 0 && !inside) {
         // Pressed on the letterbox: not for the host.
         _ignoredButtons |= added;
       } else {
-        _flushWheel();
-        _text.resetBuffer();
+        _beforePress();
+        _mouseDevice = event.device;
         for (var bit = 1; bit <= added; bit <<= 1) {
           final button = _buttonFor(added & bit);
           if (button == null) continue;
@@ -851,8 +952,28 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
         _viewer.pointerMove(n);
       }
     }
-    if (inside || _remoteButtons != 0) _cursor.value = clamped;
+    if (inside || _remoteButtons != 0) {
+      _cursor.value = clamped;
+      _lastMousePoint = clamped;
+    }
     _cursorShown.value = false;
+  }
+
+  /// Releases the [buttons] held on the host, at [point].
+  void _releaseMouseButtons(int buttons, Offset point) {
+    _flushWheel();
+    for (var bit = 1; bit <= buttons; bit <<= 1) {
+      final button = _buttonFor(buttons & bit);
+      if (button == null) continue;
+      _viewer.pointerButton(
+        point,
+        button,
+        down: false,
+        clickCount: _clickCounts[button] ?? 1,
+      );
+    }
+    _remoteButtons &= ~buttons;
+    if (_remoteButtons == 0) _afterInput();
   }
 
   int _countClick(PointerButton button, Offset position) {
@@ -942,6 +1063,7 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
       event.timeStamp,
     );
     if (_fingers.length == 1) {
+      _driver = event.pointer;
       _touchDirect = direct;
       _phase = _TouchPhase.pending;
       final lastTap = _lastTapTime;
@@ -980,8 +1102,7 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
     _phase = _TouchPhase.done;
     final n = _normalize(_fingers.values.first.start);
     if (!_active || !isInsideUnit(n)) return;
-    _flushWheel();
-    _text.resetBuffer();
+    _beforePress();
     _viewer.click(n, button: PointerButton.right);
     _lastTapTime = null;
     _afterInput();
@@ -1007,13 +1128,13 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
             _phase = _TouchPhase.done;
             return;
           }
-          _text.resetBuffer();
+          _beforePress();
           _viewer.pointerButton(start, PointerButton.left, down: true);
           _phase = _TouchPhase.drag;
           _viewer.pointerMove(clampToUnit(_normalize(finger.last)));
         } else {
           if (_secondTap) {
-            _text.resetBuffer();
+            _beforePress();
             _viewer.pointerButton(
               _cursor.value,
               PointerButton.left,
@@ -1028,6 +1149,8 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
       case _TouchPhase.cursor:
         _moveCursor(finger.last - previous, finger.stamp - previousStamp);
       case _TouchPhase.drag:
+        // Another finger that lands during a drag doesn't take it over.
+        if (event.pointer != _driver) return;
         if (_touchDirect) {
           _viewer.pointerMove(clampToUnit(_normalize(finger.last)));
         } else {
@@ -1060,7 +1183,10 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
         _phase = _TouchPhase.idle;
         _lastTapTime = null;
       case _TouchPhase.drag:
-        _phase = _TouchPhase.idle;
+        // A stray finger lifting doesn't end the drag; the driving finger
+        // lifting does, and the rest of the gesture is ignored.
+        if (event.pointer != _driver) break;
+        _phase = _fingers.isEmpty ? _TouchPhase.idle : _TouchPhase.done;
         _endDrag(finger.last);
       case _TouchPhase.two:
         _phase = _TouchPhase.done;
@@ -1069,8 +1195,7 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
           final point = _touchDirect
               ? clampToUnit(_normalize(_twoStartCentroid))
               : _cursor.value;
-          _flushWheel();
-          _text.resetBuffer();
+          _beforePress();
           _viewer.click(point, button: PointerButton.right);
           _lastTapTime = null;
           _afterInput();
@@ -1087,9 +1212,11 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
     }
   }
 
-  void _touchCancel(PointerCancelEvent event) {
-    final finger = _fingers.remove(event.pointer);
+  /// A finger cancelled, or a pen removed while down.
+  void _cancelFinger(int pointer) {
+    final finger = _fingers.remove(pointer);
     if (finger == null) return;
+    if (_phase == _TouchPhase.drag && pointer != _driver) return;
     _longPressTimer?.cancel();
     _longPressTimer = null;
     if (_phase == _TouchPhase.drag) _endDrag(finger.last);
@@ -1106,8 +1233,7 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
       point = _cursor.value;
     }
     final count = _secondTap ? _tapCount + 1 : 1;
-    _flushWheel();
-    _text.resetBuffer();
+    _beforePress();
     _viewer.click(point, clickCount: count);
     _tapCount = count;
     _lastTapTime = now;

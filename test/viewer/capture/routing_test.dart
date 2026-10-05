@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:remote_input/remote_input.dart';
@@ -19,6 +20,7 @@ KeyRoute _route(
   int modifiers = 0,
   bool composing = false,
   bool processKey = false,
+  bool altGr = true,
 }) => routeKeyDown(
   mode: mode,
   usage: usage,
@@ -26,6 +28,7 @@ KeyRoute _route(
   modifiers: modifiers,
   composing: composing,
   processKey: processKey,
+  altGr: altGr,
 );
 
 void main() {
@@ -87,6 +90,31 @@ void main() {
         _route(auto, _q, modifiers: KeyModifiers.control | KeyModifiers.alt),
         KeyRoute.physical,
       );
+    });
+
+    test('Ctrl+Alt is AltGr only where the platform means it', () {
+      expect(ctrlAltIsAltGr(TargetPlatform.windows), isTrue);
+      expect(ctrlAltIsAltGr(TargetPlatform.linux), isTrue);
+      for (final p in [
+        TargetPlatform.macOS,
+        TargetPlatform.iOS,
+        TargetPlatform.android,
+      ]) {
+        expect(ctrlAltIsAltGr(p), isFalse);
+      }
+      // A Mac's Ctrl+Option+Q is a shortcut, whatever character it makes.
+      for (final mode in [KeyboardMode.auto, KeyboardMode.text]) {
+        expect(
+          _route(
+            mode,
+            _q,
+            character: 'œ',
+            modifiers: KeyModifiers.control | KeyModifiers.alt,
+            altGr: false,
+          ),
+          KeyRoute.physical,
+        );
+      }
     });
 
     test('dead keys and IMEs stay with the platform', () {

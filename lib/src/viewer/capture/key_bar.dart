@@ -19,6 +19,10 @@ part of 'capture.dart';
 /// Pass the same [controller] to the [RemoteInputCapture] so latched
 /// modifiers apply to typing and clicks there, and for the keyboard
 /// button. Arrow keys and Delete repeat while held.
+///
+/// While the viewer's session isn't active the keys are disabled (only the
+/// keyboard button works), and sticky modifiers are let go: the host
+/// releases everything when the session stops.
 class RemoteKeyBar extends StatefulWidget {
   /// Creates a key bar sending through [viewer].
   const RemoteKeyBar({
@@ -107,7 +111,15 @@ class _RemoteKeyBarState extends State<RemoteKeyBar> {
       if (mounted) setState(() {});
     }
 
-    _stateSubscription = widget.viewer.stateChanges.listen(rebuild);
+    _stateSubscription = widget.viewer.stateChanges.listen((state) {
+      if (!state.isActive) {
+        // The host has released everything: so does the bar.
+        _stopRepeat(widget.viewer);
+        _controller._forgetSticky();
+        if (_menu.isOpen) _menu.close();
+      }
+      rebuild(state);
+    });
     _surfaceSubscription = widget.viewer.surfaceChanges.listen(rebuild);
   }
 
@@ -159,7 +171,12 @@ class _RemoteKeyBarState extends State<RemoteKeyBar> {
 
   void _sendShortcut(List<int> hostUsages) {
     _menu.close();
-    _viewer.sendShortcut([for (final u in hostUsages) _toSend(u)]);
+    // Modifiers held on the host (a locked sticky Ctrl, a Shift held on a
+    // hardware keyboard) stay in every key's state, so the host's drift
+    // correction doesn't release them.
+    _viewer.sendShortcut([
+      for (final u in hostUsages) _toSend(u),
+    ], heldModifiers: _controller._bits);
   }
 
   @override
@@ -184,6 +201,7 @@ class _RemoteKeyBarState extends State<RemoteKeyBar> {
     }) => _KeyButton(
       label: label,
       semanticsLabel: semantics,
+      enabled: active,
       onTap: () => _press(usage),
       onHoldStart: repeat ? () => _startRepeat(usage) : null,
       onHoldEnd: repeat ? () => _stopRepeat(_viewer) : null,
@@ -195,6 +213,7 @@ class _RemoteKeyBarState extends State<RemoteKeyBar> {
       return _KeyButton(
         label: label,
         semanticsLabel: semantics,
+        enabled: active,
         selected: state != StickyModifierState.off,
         locked: state == StickyModifierState.locked,
         onTap: () => controller.toggleStickyModifier(usage),
@@ -257,13 +276,14 @@ class _RemoteKeyBarState extends State<RemoteKeyBar> {
           menuChildren: [
             for (final (label, usages) in shortcuts)
               MenuItemButton(
-                onPressed: () => _sendShortcut(usages),
+                onPressed: active ? () => _sendShortcut(usages) : null,
                 child: Text(label),
               ),
           ],
           child: _KeyButton(
             label: 'Keys…',
             semanticsLabel: 'Send keys',
+            enabled: active,
             onTap: () => _menu.isOpen ? _menu.close() : _menu.open(),
           ),
         ),
@@ -290,7 +310,8 @@ class _RemoteKeyBarState extends State<RemoteKeyBar> {
 }
 
 /// One key of a [RemoteKeyBar]. A tap calls [onTap]; when [onHoldStart] is
-/// set, a long press calls it, and [onHoldEnd] when it ends.
+/// set, a long press calls it, and [onHoldEnd] when it ends. A disabled key
+/// takes no new presses.
 class _KeyButton extends StatefulWidget {
   const _KeyButton({
     this.label,
@@ -299,6 +320,7 @@ class _KeyButton extends StatefulWidget {
     required this.onTap,
     this.onHoldStart,
     this.onHoldEnd,
+    this.enabled = true,
     this.selected = false,
     this.locked = false,
   });
@@ -309,6 +331,7 @@ class _KeyButton extends StatefulWidget {
   final VoidCallback onTap;
   final VoidCallback? onHoldStart;
   final VoidCallback? onHoldEnd;
+  final bool enabled;
   final bool selected;
   final bool locked;
 
@@ -335,52 +358,58 @@ class _KeyButtonState extends State<_KeyButton> {
     final hold = widget.onHoldStart;
     return Semantics(
       button: true,
+      enabled: widget.enabled,
       selected: widget.selected,
       label: widget.semanticsLabel ?? widget.label,
       excludeSemantics: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTapDown: (_) => _setDown(true),
-        onTapUp: (_) => _setDown(false),
-        onTapCancel: () => _setDown(false),
-        onTap: widget.onTap,
-        onLongPressStart: hold == null
-            ? null
-            : (_) {
-                _setDown(true);
-                hold();
-              },
-        onLongPressEnd: hold == null
-            ? null
-            : (_) {
-                _setDown(false);
-                widget.onHoldEnd?.call();
-              },
-        onLongPressCancel: hold == null
-            ? null
-            : () {
-                _setDown(false);
-                widget.onHoldEnd?.call();
-              },
-        child: Container(
-          constraints: const BoxConstraints(minWidth: 40),
-          margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 5),
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: background,
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-              color: widget.locked ? scheme.onPrimary : scheme.outlineVariant,
-              width: widget.locked ? 2 : 1,
+      // A hold already under way still ends: the press was hit-tested
+      // before the key was disabled.
+      child: IgnorePointer(
+        ignoring: !widget.enabled,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => _setDown(true),
+          onTapUp: (_) => _setDown(false),
+          onTapCancel: () => _setDown(false),
+          onTap: widget.onTap,
+          onLongPressStart: hold == null
+              ? null
+              : (_) {
+                  _setDown(true);
+                  hold();
+                },
+          onLongPressEnd: hold == null
+              ? null
+              : (_) {
+                  _setDown(false);
+                  widget.onHoldEnd?.call();
+                },
+          onLongPressCancel: hold == null
+              ? null
+              : () {
+                  _setDown(false);
+                  widget.onHoldEnd?.call();
+                },
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 40),
+            margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 5),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: background,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: widget.locked ? scheme.onPrimary : scheme.outlineVariant,
+                width: widget.locked ? 2 : 1,
+              ),
             ),
+            child: widget.icon != null
+                ? Icon(widget.icon, size: 20, color: foreground)
+                : Text(
+                    widget.label ?? '',
+                    style: TextStyle(color: foreground, fontSize: 14),
+                  ),
           ),
-          child: widget.icon != null
-              ? Icon(widget.icon, size: 20, color: foreground)
-              : Text(
-                  widget.label ?? '',
-                  style: TextStyle(color: foreground, fontSize: 14),
-                ),
         ),
       ),
     );
