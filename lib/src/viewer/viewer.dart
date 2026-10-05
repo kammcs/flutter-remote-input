@@ -124,6 +124,7 @@ final class RemoteInputViewer {
   final ViewerOptions options;
 
   final PeerPlatform _platform;
+  PeerPlatform? _hostPlatform;
   final StateValue<SessionState> _state = StateValue(const SessionWaiting());
   final StateValue<RemoteSurface?> _surface = StateValue(null);
   final List<StreamSubscription<Object?>> _subscriptions = [];
@@ -174,6 +175,17 @@ final class RemoteInputViewer {
     droppedWhileInactive: _droppedInactive,
     roundTripTime: _rtt,
   );
+
+  /// The OS this viewer reports in the handshake: [ViewerOptions.platform],
+  /// or the one it runs on.
+  PeerPlatform get platform => _platform;
+
+  /// The host's OS, from its handshake; `null` until the first one.
+  ///
+  /// A "Send keys" menu or a key bar uses it to label keys (Command or the
+  /// Windows key) and, with the host's default `ModifierMapping.auto`, to
+  /// know whether the host swaps Control and Meta.
+  PeerPlatform? get hostPlatform => _hostPlatform;
 
   /// The buttons this viewer holds down on the host.
   Set<PointerButton> get heldButtons => Set.unmodifiable(_heldButtons);
@@ -453,6 +465,7 @@ final class RemoteInputViewer {
   void _onHostHello(HostHello m) {
     _resetSession();
     _tag = sessionTagOf(m.nonce);
+    _hostPlatform = m.hostPlatform;
     _surface.set(
       RemoteSurface(
         epoch: m.surfaceEpoch,
