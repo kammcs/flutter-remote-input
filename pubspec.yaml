@@ -1,0 +1,37 @@
+name: remote_input
+description: "Remote keyboard and mouse control for Flutter desktop apps: a versioned input protocol, viewer-side capture, and injection on Windows (SendInput) and macOS (CGEventPost) with safety controls."
+version: 0.0.1
+repository: https://github.com/kammcs/flutter-remote-input
+issue_tracker: https://github.com/kammcs/flutter-remote-input/issues
+topics:
+  - remote-control
+  - input
+  - desktop
+  - keyboard
+  - mouse
+# Remove at the first pub.dev release (roadmap M8). Until then a mistaken
+# `dart pub publish` stops here.
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+  flutter: ">=3.47.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  # Injection is native on Windows and macOS only (docs/design.md §2). The
+  # protocol and the viewer-side capture are Dart and run on every platform.
+  plugin:
+    platforms:
+      macos:
+        pluginClass: RemoteInputPlugin
+      windows:
+        pluginClass: RemoteInputPluginCApi
