@@ -422,6 +422,11 @@ buildIt.Social's Phase 6 adds remote control to its calls. The package's API is 
 | `remote-input/host` | presenter | reliable | the granted viewer |
 
 - `cloudflare_realtime`'s `room.data` gives each message's sender as a participant, derived from the channel's session and the room's signaling, never from the payload. The adapter passes on only the granted participant's messages.
+- **Who can read the viewer's input (found in M6).** The SFU forwards a published channel to **every** subscriber, and DTLS protects only each hop, not one call member from another. So any member of the room who knows the viewer's session id and the channel name could subscribe to `remote-input/reliable` and read what the viewer types, passwords included. The package can't prevent this; the consumer must:
+  - **Restrict the subscriptions on its server.** Its broker already checks every `sessionId` in `datachannels/new`; it should also allow a subscription to a `remote-input/*` channel only from the presenter's session named in the grant (and to `remote-input/host` only from the granted viewer's).
+  - **Name the channels per grant** (for example `remote-input/<grant id>/reliable`, with an unguessable id), as a second layer.
+  - Until both are in place, treat keystrokes over the call as visible to the room. Open question 12 now also asks whether the package should offer app-layer encryption.
+  - The reference adapter (`example/cloudflare_realtime_adapter/`) passes on only the granted participant's messages, which stops injection by others, but can't stop others from reading.
 - **Known gap:** a **web** endpoint of an unreliable channel still retransmits (a `dart_webrtc` limitation that `cloudflare_realtime` documents). Stale-move dropping keeps the pointer correct; moves from a browser viewer may just arrive later under packet loss.
 
 What the app gets from the package to build its consent experience: `ControlSession.state` and `stateChanges` with reasons, `stop()`, `RemoteInputHost.stopAll()`, `HostOptions` (expiry, keyboard on or off, `KeyFilter`, limits), `session.stats`, `RemoteInputPermissions`, and `RemoteInputHost.limitations`. Nothing else should be needed; if the consumer finds a gap, it belongs in this list.
@@ -489,6 +494,7 @@ final testHost = RemoteInputHost(platform: platform);
 
 | Threat | Example | Package mitigation | Left to the app |
 |---|---|---|---|
+| **Eavesdropping in the call** | Another call member subscribes to the viewer's input channel and reads keystrokes | Nothing in the payload is secret-protected in v1 (open question 12) | Server-side restriction of who may subscribe to the input channels; per-grant channel names (§9) |
 | **Unauthorized viewer** | Someone in the call who wasn't granted control sends input | Off by default; a session reads only the link the app bound; session nonce and tag | Consent, server-side grants, filtering the transport by verified sender |
 | **Malicious authorized viewer** | Opens a terminal, downloads and runs something, reads files | Local input wins; instant stop and `stopAll()`; expiry backstop; keyboard can be off; `KeyFilter`; window surfaces confine the pointer and keys; no elevated targets | A visible banner and border, the revoke hotkey, trusting whom you grant, the audit log |
 | **Replay** | Recorded input messages replayed later, or into another session | The session nonce in the handshake and the tag in every message; strictly increasing `seq` on the reliable channel; stale-move dropping; transport encryption | Grants bound to one call's media session |
@@ -532,7 +538,7 @@ For the agent building the package to resolve. Record each answer here (and in t
 9. ~~**Pixel wheel deltas on Windows.**~~ **Answered (M2):** 100/3 px per line, accumulated (§7.2). Check the feel on a device.
 10. **macOS event source and flags:** which `CGEventSourceStateID` keeps injected modifiers from mixing with the local user's, and how text events should set flags while the viewer holds Shift.
 11. **Viewer keyboard capture per platform:** how Flutter's `HardwareKeyboard` and a text-input client interact on each viewer platform (desktop, web, phones with soft keyboards), and how `auto` mode avoids sending a character twice or not at all.
-12. **Message authentication:** is an optional HMAC worth having for transports without peer authentication, or is that the transport's job?
+12. **Message authentication and confidentiality:** is an optional HMAC worth having for transports without peer authentication, or is that the transport's job? And, since an SFU forwards a channel to every subscriber (§9), should the package offer optional end-to-end encryption of input with a key the app exchanges over its authenticated signaling (AES-GCM, which would add a crypto dependency)? Until decided, the consumer restricts subscriptions on its server.
 13. **CI injection tests on Windows:** can GitHub's Windows runners inject into a window (they need an interactive desktop)? If not, the Windows checks stay on a real machine.
 14. **The example's video:** the example has no video stack. Is a surface placeholder with the right aspect ratio enough for the demo, or should it stream low-rate screenshots, or depend on `cloudflare_realtime` in a second example?
 15. **Long text:** pasting a long text through the text path is slow at 200 characters a second. Is that acceptable, given that clipboard sync is out of scope?
