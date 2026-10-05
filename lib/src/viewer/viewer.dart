@@ -378,6 +378,12 @@ final class RemoteInputViewer {
     var modifiers =
         (mapModifiers ? KeyModifiers.none : KeyModifiers.unmapped) |
         heldModifiers;
+    // A modifier already held stays as it is: pressing it again and then
+    // releasing it would let go of the held one.
+    usages = [
+      for (final u in usages)
+        if (HidModifier.bitOf(u) & heldModifiers == 0) u,
+    ];
     for (final u in usages) {
       modifiers |= HidModifier.bitOf(u);
       key(u, KeyAction.down, modifiers: modifiers);

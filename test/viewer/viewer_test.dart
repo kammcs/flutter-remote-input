@@ -529,6 +529,27 @@ void main() {
     });
   });
 
+  test('sendShortcut leaves a held modifier that is part of it held', () {
+    fakeAsync((async) {
+      final p = Pair(async);
+      p.viewer.key(
+        HidModifier.controlLeft,
+        KeyAction.down,
+        modifiers: KeyModifiers.control,
+      );
+      p.viewer.sendShortcut([
+        HidModifier.controlLeft,
+        usageC,
+      ], heldModifiers: KeyModifiers.control);
+      p.settle();
+      expect(p.events, [
+        const InjectedKey(HidModifier.controlLeft, down: true),
+        const InjectedKey(usageC, down: true),
+        const InjectedKey(usageC, down: false),
+      ]);
+    });
+  });
+
   test('splitUtf8 never splits a code point', () {
     final text = 'a€😀' * 300;
     final parts = splitUtf8(text, 1024);

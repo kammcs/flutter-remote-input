@@ -98,6 +98,16 @@ A short pass (A1 steps 2, 3, 7 and A2 step 1) for each viewer against each host:
 - On phones, use touch: tap to click, drag to drag. The key bar (Esc, Tab, arrows, sticky Ctrl/Alt/Meta/Shift) sends what the soft keyboard lacks; **Send keys → Type text…** types text. (Trackpad touch mode and soft-keyboard capture arrive with the capture widget, M4.)
 - The host's banner shows the viewer's platform, and "(browser)" for web viewers.
 
+
+**Viewer review fixes (M7), on real devices:**
+
+- iOS or iPad with a hardware keyboard: hold Cmd, Cmd+Tab away and back: Cmd isn't left held on the host. Windows desktop and Chrome: hold Alt, Alt+Tab away and back: nothing stays held, and the capture gets focus back.
+- Android: latch Ctrl on the key bar, raise the soft keyboard, type "c": it arrives as Ctrl+C. Home button and back: everything is released. In the example (a `Scaffold`), dismiss the keyboard with Back: the key bar's button flips to "show".
+- Every browser: right-click over the view reaches the host with no browser menu; the menu returns after the session pauses or the capture is removed.
+- iPad with Pencil, or a Windows pen: hovering with the barrel button only moves the pointer; lifting the pen out of range mid-drag releases the button.
+- Any mouse: hold a button, pause from the host, resume while still holding: nothing is pressed or dragged until you let go.
+- Touch, direct mode: a second finger landing during a one-finger drag doesn't move it.
+
 ### B2. Coordinates on mixed-DPI, multi-monitor hosts
 
 For **each display** of the host, pick it in **Shared display**, pair, and:
@@ -118,6 +128,9 @@ Needs the capture widget's text path (M4) for dead keys and IMEs; the stand-in s
 | Japanese or Chinese pinyin IME | US | `日本語` / `你好`: exactly the committed text, nothing from composing |
 
 Then copy, paste, select all and undo in each direction. **Pass:** the text arrives exactly.
+
+
+**Composition and AltGr (M7 review):** on Android with Gboard and Samsung Keyboard, type a word (underlined) and tap elsewhere on the host: the word is typed once, at the old caret, before the click, and the next word starts fresh. With a Japanese or pinyin IME mid-composition on Windows, macOS and the web, click the host: the composition is committed once and the candidate window closes. A Mac viewer's Ctrl+Option+letter arrives as a shortcut; a Windows or Linux viewer's AltGr characters still go by text.
 
 ### B4. Latency
 
