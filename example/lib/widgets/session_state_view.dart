@@ -42,6 +42,12 @@ String _blocked(BlockReason reason, bool host) {
     BlockReason.surfaceHidden => 'The shared window is minimized',
     BlockReason.windowNotInFront =>
       'Typing is blocked while the shared window isn\'t in front',
+    BlockReason.localInputUnmonitored =>
+      host
+          ? 'Paused: can\'t watch for your own mouse and keyboard'
+          : 'Paused: the host can\'t watch for its own input',
+    BlockReason.hostAppInFront =>
+      'Typing is blocked while the host app itself is in front',
     BlockReason.other => 'Input is blocked for now',
   };
 }

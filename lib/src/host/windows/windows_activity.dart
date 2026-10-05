@@ -41,7 +41,9 @@ final class WindowsLocalActivity implements LocalActivityMonitor {
   @override
   Stream<void> get activity => _controller.stream;
 
-  /// Whether the native hooks are being polled.
+  /// Whether the native hooks are installed and being polled.
+  // TODO(review M3): also notice hooks Windows removed silently.
+  @override
   bool get isMonitoring => _timer != null;
 
   void _start() {

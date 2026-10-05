@@ -178,6 +178,14 @@ enum BlockReason {
   /// Blocks keys only; the pointer continues.
   windowNotInFront(6),
 
+  /// Local input can't be detected right now (Windows: the input hooks
+  /// aren't installed), so nothing is injected until it can.
+  localInputUnmonitored(7),
+
+  /// The host app itself is in front, so keys would go to its own windows
+  /// (its consent dialog, its Stop button). Blocks keys only.
+  hostAppInFront(8),
+
   /// A reason this version doesn't know, from a newer host.
   other(255);
 
@@ -187,7 +195,8 @@ enum BlockReason {
   final int code;
 
   /// Whether this blocks pointer input as well as keys.
-  bool get blocksPointer => this != secureInput && this != windowNotInFront;
+  bool get blocksPointer =>
+      this != secureInput && this != windowNotInFront && this != hostAppInFront;
 
   /// The reason with [code]; [other] for codes this version doesn't know.
   static BlockReason fromCode(int code) =>

@@ -121,6 +121,13 @@ abstract interface class LocalActivityMonitor {
   /// movement past the platform's threshold. Monitoring runs while the
   /// stream has a listener.
   Stream<void> get activity;
+
+  /// Whether local input is being detected right now (the Windows hooks are
+  /// installed and alive). Read before every injected event, so it must be
+  /// cheap. While it's false, the session blocks with
+  /// `BlockReason.localInputUnmonitored`: no injection without local-input
+  /// detection (`docs/design.md` §6.3).
+  bool get isMonitoring;
 }
 
 /// The kind of input a check is for.
@@ -158,4 +165,13 @@ abstract interface class SurfaceResolver {
   /// Whether keys typed now go to [surface]: its window is in front. Always
   /// true for displays and [RectSurface]s.
   bool hasKeyboardFocus(SharedSurface surface);
+
+  /// Whether the window under [point] belongs to the host app's own
+  /// process, so a viewer can't click its consent dialog or Stop button
+  /// (`HostOptions.protectHostWindows`).
+  bool isOwnWindowAt(Offset point);
+
+  /// Whether the host app's own process is in front, so keys typed now would
+  /// go to it.
+  bool isOwnAppInFront();
 }

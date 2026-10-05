@@ -24,6 +24,13 @@ import 'win32_api.dart';
 ///   was given. Keys go to it while the foreground window passes the same
 ///   test.
 final class WindowsSurfaceResolver implements SurfaceResolver {
+  // TODO(review H1): own-process checks; stubs until the Windows fix lands.
+  @override
+  bool isOwnWindowAt(Offset point) => false;
+
+  @override
+  bool isOwnAppInFront() => false;
+
   /// Creates a resolver on [api].
   WindowsSurfaceResolver(this._api);
 

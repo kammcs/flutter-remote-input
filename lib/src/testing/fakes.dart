@@ -204,8 +204,12 @@ final class FakeLocalActivity implements LocalActivityMonitor {
   @override
   Stream<void> get activity => _activity.stream;
 
-  /// Whether anything is monitoring.
-  bool get isMonitoring => _activity.hasListener;
+  /// Whether local input is detected: something listens, and [healthy].
+  @override
+  bool get isMonitoring => _activity.hasListener && healthy;
+
+  /// Set false to simulate detection failing (Windows hooks removed).
+  bool healthy = true;
 
   /// Reports local input, as if the person at the host touched their mouse
   /// or keyboard.
@@ -252,6 +256,18 @@ final class FakeSurfaceResolver implements SurfaceResolver {
 
   /// Whether a window surface is in front for keys.
   bool keyboardFocus = true;
+
+  /// Points over the host app's own windows.
+  bool Function(Offset point)? ownWindowAt;
+
+  /// Whether the host app is in front.
+  bool ownAppInFront = false;
+
+  @override
+  bool isOwnWindowAt(Offset point) => ownWindowAt?.call(point) ?? false;
+
+  @override
+  bool isOwnAppInFront() => ownAppInFront;
 
   @override
   Future<List<DisplayInfo>> displays() async => List.of(displayList);

@@ -230,6 +230,13 @@ bool macosIsOccluded(Offset point, MacosWindowInfo window) {
 /// a second (open question 4). Displays are cached until the display
 /// configuration changes, or for [displayCacheLifetime].
 final class MacosSurfaceResolver implements SurfaceResolver {
+  // TODO(review H1): own-process checks; stubs until the macOS fix lands.
+  @override
+  bool isOwnWindowAt(Offset point) => false;
+
+  @override
+  bool isOwnAppInFront() => false;
+
   /// Creates a resolver over [native].
   MacosSurfaceResolver(
     this._native, {
@@ -389,6 +396,10 @@ final class MacosSecureContext implements SecureContextProbe {
 /// [activity] has a listener (`docs/design.md` §6.3; see
 /// [MacosActivityDetector]).
 final class MacosLocalActivity implements LocalActivityMonitor {
+  // The HID counters are always readable.
+  @override
+  bool get isMonitoring => true;
+
   /// Creates a monitor over [native], polling every [pollInterval] (10 ms,
   /// for a pause within the 100 ms target).
   MacosLocalActivity(
