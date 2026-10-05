@@ -15,7 +15,7 @@ with the Accessibility permission checks. See the package's docs/design.md.
   s.author           = { 'Kamm Creative Solutions' => 'https://github.com/kammcs' }
 
   s.source           = { :path => '.' }
-  s.source_files = 'remote_input/Sources/remote_input/**/*'
+  s.source_files = 'remote_input/Sources/remote_input/**/*.swift'
 
   # If your plugin requires a privacy manifest, for example if it collects user
   # data, update the PrivacyInfo.xcprivacy file to describe your plugin's
@@ -24,6 +24,9 @@ with the Accessibility permission checks. See the package's docs/design.md.
   # s.resource_bundles = {'remote_input_privacy' => ['remote_input/Sources/remote_input/PrivacyInfo.xcprivacy']}
 
   s.dependency 'FlutterMacOS'
+  # CGEventPost and the window list (CoreGraphics), Secure Event Input
+  # (Carbon's HIToolbox) and NSWorkspace (AppKit).
+  s.frameworks = 'AppKit', 'ApplicationServices', 'Carbon', 'CoreGraphics'
 
   s.platform = :osx, '12.0'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
