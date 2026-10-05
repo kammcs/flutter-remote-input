@@ -27,6 +27,7 @@ final class ViewerOptions {
     this.maxBufferedMoveBytes = 16 * 1024,
     this.pingInterval = const Duration(seconds: 1),
     this.hostTimeout = const Duration(seconds: 10),
+    this.maxTextBytes = 16 * 1024,
   });
 
   /// The OS to report in the handshake, which decides the host's shortcut
@@ -53,6 +54,12 @@ final class ViewerOptions {
   /// session with [StopReason.timedOut]. It keeps listening, so a host that
   /// comes back with a new session is picked up.
   final Duration hostTimeout;
+
+  /// The most UTF-8 bytes one [RemoteInputViewer.text] call sends; the rest
+  /// is dropped, and the call returns false. The host types about 200
+  /// characters a second and stops a session whose queue overflows, so a
+  /// long paste must be cut (`docs/design.md` §13, question 15).
+  final int maxTextBytes;
 }
 
 /// The surface the host shares, as it announced it.
@@ -77,6 +84,7 @@ final class ViewerStats {
     required this.movesSkippedForBackpressure,
     required this.droppedWhileInactive,
     required this.roundTripTime,
+    this.textTruncated = 0,
     this.roundTripP50,
     this.roundTripP95,
   });
@@ -96,6 +104,9 @@ final class ViewerStats {
 
   /// The latest round-trip time to the host, if measured.
   final Duration? roundTripTime;
+
+  /// [RemoteInputViewer.text] calls cut at [ViewerOptions.maxTextBytes].
+  final int textTruncated;
 
   /// The median round-trip time over the last minute of pings.
   final Duration? roundTripP50;
@@ -126,7 +137,13 @@ final class RemoteInputViewer {
       ..add(reliable.messages.listen(_onBytes, onDone: _onLinkDone))
       ..add(
         reliable.openChanges.listen((open) {
-          if (!open && !_closed) _end(StopReason.linkClosed);
+          // A link may start closed and replay that: only a close after it
+          // was open ends the viewer.
+          if (open) {
+            _wasOpen = true;
+          } else if (_wasOpen && !_closed) {
+            _end(StopReason.linkClosed);
+          }
         }),
       );
     if (!identical(link.unreliable, reliable)) {
@@ -146,6 +163,9 @@ final class RemoteInputViewer {
   final List<StreamSubscription<Object?>> _subscriptions = [];
 
   bool _closed = false;
+  bool _wasOpen = false;
+  bool _quietOnce = false;
+  int _textTruncated = 0;
   int? _tag;
   bool _helloSent = false;
   int _seq = 0;
@@ -194,6 +214,7 @@ final class RemoteInputViewer {
     movesSkippedForBackpressure: _backpressure,
     droppedWhileInactive: _droppedInactive,
     roundTripTime: _rtt,
+    textTruncated: _textTruncated,
     roundTripP50: _rttPercentile(0.50),
     roundTripP95: _rttPercentile(0.95),
   );
@@ -319,12 +340,26 @@ final class RemoteInputViewer {
 
   /// Types [text] on the host by Unicode, whatever the keyboard layouts.
   /// Long text is split into messages of at most 1024 UTF-8 bytes; the host
-  /// types about 200 characters a second.
-  void text(String text) {
-    if (!_canSend() || text.isEmpty) return;
-    for (final chunk in splitUtf8(text, maxTextBytes)) {
+  /// types about 200 characters a second. Text past
+  /// [ViewerOptions.maxTextBytes] is dropped: returns whether all of it was
+  /// sent, so an app can say a paste was cut.
+  bool text(String text) {
+    if (text.isEmpty) return true;
+    if (!_canSend()) return false;
+    final chunks = splitUtf8(text, maxTextBytes);
+    var sentBytes = 0;
+    var all = true;
+    for (final chunk in chunks) {
+      final n = utf8.encode(chunk).length;
+      if (sentBytes + n > options.maxTextBytes) {
+        all = false;
+        break;
+      }
+      sentBytes += n;
       _sendInput((seq) => TextMessage(seq, chunk));
     }
+    if (!all) _textTruncated++;
+    return all;
   }
 
   /// Presses [usages] in order, then releases them in reverse: a shortcut
@@ -332,14 +367,23 @@ final class RemoteInputViewer {
   /// "Send keys" menu. Modifier state is derived from the modifier keys in
   /// [usages]. With [mapModifiers] false, the host applies no Command/Control
   /// mapping, so a Mac viewer can send the Windows key itself.
-  void sendShortcut(List<int> usages, {bool mapModifiers = true}) {
-    var modifiers = mapModifiers ? KeyModifiers.none : KeyModifiers.unmapped;
+  /// [heldModifiers] are modifier bits already held on the host (a key
+  /// bar's locked Ctrl), kept in every key's state so the host doesn't
+  /// release them.
+  void sendShortcut(
+    List<int> usages, {
+    bool mapModifiers = true,
+    int heldModifiers = KeyModifiers.none,
+  }) {
+    var modifiers =
+        (mapModifiers ? KeyModifiers.none : KeyModifiers.unmapped) |
+        heldModifiers;
     for (final u in usages) {
       modifiers |= HidModifier.bitOf(u);
       key(u, KeyAction.down, modifiers: modifiers);
     }
     for (final u in usages.reversed) {
-      modifiers &= ~HidModifier.bitOf(u);
+      modifiers &= ~(HidModifier.bitOf(u) & ~heldModifiers);
       key(u, KeyAction.up, modifiers: modifiers);
     }
   }
@@ -563,9 +607,19 @@ final class RemoteInputViewer {
   void _ping() {
     final quiet = clock.now().microsecondsSinceEpoch - _lastHeardMicros;
     if (quiet > options.hostTimeout.inMicroseconds) {
-      _resetSession();
-      _state.set(const SessionStopped(StopReason.timedOut));
-      return;
+      // One ping's grace: after a suspend, this timer can fire before the
+      // host's queued replies are read.
+      if (!_quietOnce) {
+        _quietOnce = true;
+      } else {
+        // Tell the host, so both ends agree control is over.
+        _sendControl(const Bye(ByeReason.closed));
+        _resetSession();
+        _state.set(const SessionStopped(StopReason.timedOut));
+        return;
+      }
+    } else {
+      _quietOnce = false;
     }
     _sendControl(
       Ping(id: _pingId, viewerMicros: clock.now().microsecondsSinceEpoch),
@@ -577,6 +631,7 @@ final class RemoteInputViewer {
     _tag = null;
     _helloSent = false;
     _seq = 0;
+    _quietOnce = false;
     _lastReliableSeq = null;
     _heldButtons.clear();
     _pendingMove = null;

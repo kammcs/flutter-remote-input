@@ -440,6 +440,95 @@ void main() {
     });
   });
 
+  test('survives a link that starts closed', () {
+    fakeAsync((async) {
+      final links = MemoryInputLink.pair(open: false);
+      final viewer = RemoteInputViewer(link: links.viewer);
+      final session = RemoteInputHost(platform: FakeHostPlatform())
+          .enable(link: links.host, surface: const SharedSurface.display(1));
+      async.flushMicrotasks();
+      expect(viewer.state, const SessionWaiting());
+      links.host.open();
+      async.elapse(const Duration(milliseconds: 50));
+      expect(viewer.state, const SessionActive());
+      expect(session.state, const SessionActive());
+    });
+  });
+
+  test('a viewer that times out tells the host, after a grace ping', () {
+    fakeAsync((async) {
+      final links = MemoryInputLink.pair();
+      final viewer = RemoteInputViewer(link: links.viewer);
+      final fromViewer = <WireMessage>[];
+      links.host.reliable.messages.listen(
+        (b) => fromViewer.add((decodeMessage(b) as Decoded).message),
+      );
+      final nonce = Uint8List(16)..[0] = 3;
+      links.host.reliable.send(
+        encodeMessage(
+          HostHello(
+            minVersion: 1,
+            maxVersion: 1,
+            nonce: nonce,
+            hostPlatform: PeerPlatform.windows,
+            capabilities: 0,
+            surfaceEpoch: 0,
+            surfaceWidth: 100,
+            surfaceHeight: 100,
+          ),
+          sessionTag: sessionTagOf(nonce),
+        ),
+      );
+      async.elapse(const Duration(milliseconds: 11500)); // first quiet ping
+      expect(viewer.state, const SessionWaiting());
+      expect(fromViewer.whereType<Bye>(), isEmpty);
+      async.elapse(const Duration(seconds: 1)); // the grace ping
+      expect(viewer.state, const SessionStopped(StopReason.timedOut));
+      expect(fromViewer.whereType<Bye>(), hasLength(1));
+    });
+  });
+
+  test('cuts text past maxTextBytes and says so', () {
+    fakeAsync((async) {
+      final p = Pair(
+        async,
+        viewerOptions: const ViewerOptions(
+          platform: PeerPlatform.windows,
+          maxTextBytes: 2048,
+        ),
+      );
+      expect(p.viewer.text('x' * 2048), isTrue);
+      expect(p.viewer.text('y' * 3000), isFalse);
+      expect(p.viewer.stats.textTruncated, 1);
+      p.settle(const Duration(seconds: 30));
+      final typed = p.events
+          .whereType<InjectedText>()
+          .map((e) => e.text)
+          .join();
+      expect(typed, 'x' * 2048 + 'y' * 2048);
+    });
+  });
+
+  test('sendShortcut keeps modifiers already held on the host', () {
+    fakeAsync((async) {
+      final p = Pair(async);
+      p.viewer.key(
+        HidModifier.shiftLeft,
+        KeyAction.down,
+        modifiers: KeyModifiers.shift,
+      );
+      p.viewer.sendShortcut([
+        HidModifier.controlLeft,
+        usageC,
+      ], heldModifiers: KeyModifiers.shift);
+      p.settle();
+      expect(
+        p.events,
+        isNot(contains(const InjectedKey(HidModifier.shiftLeft, down: false))),
+      );
+    });
+  });
+
   test('splitUtf8 never splits a code point', () {
     final text = 'a€😀' * 300;
     final parts = splitUtf8(text, 1024);
