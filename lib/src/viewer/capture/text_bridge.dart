@@ -44,6 +44,7 @@ abstract interface class CaptureTextSink {
 /// **Composing.** Text inside the composing range (an IME's candidate, a
 /// pending dead key, an Android keyboard's current word) isn't sent: only
 /// once it leaves the range is it committed. Deletions are sent at once.
+/// [finishComposing] commits it early, before a click.
 final class CaptureTextInput
     with TextInputClient
     implements DeltaTextInputClient {
@@ -139,6 +140,29 @@ final class CaptureTextInput
     if (connection != null && connection.attached) {
       connection.setEditingState(_value);
     }
+  }
+
+  /// Ends the composition: the text being composed is committed (sent) as
+  /// it stands, and the buffer is reset to the placeholder, which tells the
+  /// platform the composition is over. Called before a click goes to the
+  /// host, so an Android keyboard's current word is typed where the caret
+  /// was, as a click away from a local field commits it, not where the
+  /// click moves the caret. Does nothing while nothing is composed.
+  void finishComposing() {
+    if (!isComposing) return;
+    final text = _value.text;
+    final end = math.min(_value.composing.end, text.length);
+    // What was passed on is a prefix of the text; the rest of the
+    // composing range hasn't been.
+    final pending = end > _sent.length ? text.substring(_sent.length, end) : '';
+    _value = initialValue;
+    _sent = placeholder;
+    _setComposing('');
+    final connection = _connection;
+    if (connection != null && connection.attached) {
+      connection.setEditingState(_value);
+    }
+    if (pending.isNotEmpty) _commit(pending);
   }
 
   // --- TextInputClient --------------------------------------------------

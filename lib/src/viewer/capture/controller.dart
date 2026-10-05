@@ -87,10 +87,15 @@ final class RemoteInputCaptureController extends ChangeNotifier {
   /// latched (released after the next key, click or text), locked, and off
   /// again. It is pressed on the host when it leaves off, and released when
   /// it returns.
+  ///
+  /// Does nothing unless the viewer's session is active (and a capture or
+  /// key bar has given this controller its viewer): the host couldn't
+  /// press it, and releases everything when the session stops.
   void toggleStickyModifier(int usage) {
     if (!HidModifier.isModifier(usage)) {
       throw ArgumentError.value(usage, 'usage', 'is not a modifier key');
     }
+    if (!(_viewer?.state.isActive ?? false)) return;
     switch (stickyModifier(usage)) {
       case StickyModifierState.off:
         _sticky[usage] = StickyModifierState.latched;

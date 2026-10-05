@@ -20,6 +20,9 @@ InjectedKey _up(int usage) => InjectedKey(usage, down: false);
 /// focus.
 final _desktop = TargetPlatformVariant.only(TargetPlatform.macOS);
 
+/// A Windows viewer, where Ctrl+Alt is AltGr.
+final _windows = TargetPlatformVariant.only(TargetPlatform.windows);
+
 void main() {
   tearDown(RemoteInputHost.stopAll);
 
@@ -178,8 +181,34 @@ void main() {
         ]);
         await h.finish(tester);
       },
-      variant: _desktop,
+      variant: _windows,
     );
+
+    testWidgets('on a Mac, Ctrl+Option+key is a shortcut, not AltGr', (
+      tester,
+    ) async {
+      final h = Harness(viewerPlatform: PeerPlatform.macos);
+      await h.start(tester, capture);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      expect(
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyQ, character: 'œ'),
+        isTrue,
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await h.settle(tester);
+      // The host swaps Control and Meta for a Mac viewer on Windows.
+      expect(h.events, [
+        _down(HidModifier.metaLeft),
+        _down(_alt),
+        _down(usageQ),
+        _up(usageQ),
+        _up(_alt),
+        _up(HidModifier.metaLeft),
+      ]);
+      await h.finish(tester);
+    }, variant: _desktop);
 
     testWidgets('IME composing shows locally, and only the commit is sent', (
       tester,
