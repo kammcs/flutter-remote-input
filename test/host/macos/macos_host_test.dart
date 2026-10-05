@@ -382,6 +382,199 @@ void main() {
     });
   });
 
+  group('keyboard panels: Spotlight (review M4)', () {
+    const spotlight = 99;
+    const panel = MacosWindowRecord(
+      ownerPid: spotlight,
+      layer: 25,
+      alpha: 1,
+      bounds: Rect.fromLTWH(500, 200, 700, 60),
+    );
+
+    test('a panel window on screen takes the keyboard', () {
+      expect(macosKeyboardPanelOpen([panel], [spotlight]), isTrue);
+      expect(macosKeyboardPanelOpen(const [], [spotlight]), isFalse);
+      expect(macosKeyboardPanelOpen([panel], const []), isFalse);
+      expect(
+        macosKeyboardPanelOpen(
+          const [
+            MacosWindowRecord(
+              ownerPid: spotlight,
+              layer: 25,
+              alpha: 0,
+              bounds: Rect.fromLTWH(500, 200, 700, 60),
+            ),
+          ],
+          [spotlight],
+        ),
+        isFalse,
+      );
+    });
+
+    test('blocks keys for a window share while it is open', () {
+      fakeAsync((async) {
+        native.windows[5] = window(pid: 42);
+        native.frontmost = 42;
+        final r = MacosSurfaceResolver(native);
+        const s = SharedSurface.window(5);
+        expect(r.hasKeyboardFocus(s), isTrue);
+        // Spotlight isn't running: the window list isn't even read.
+        expect(native.screenReads, 0);
+
+        native.panelPids = [spotlight];
+        native.screen = [
+          panel,
+          const MacosWindowRecord(
+            ownerPid: 42,
+            layer: 0,
+            alpha: 1,
+            bounds: Rect.fromLTWH(100, 100, 800, 600),
+          ),
+        ];
+        async.elapse(const Duration(milliseconds: 50));
+        // Spotlight doesn't change the frontmost app.
+        expect(r.hasKeyboardFocus(s), isFalse);
+        // A display share's keys go wherever the keyboard is anyway.
+        expect(r.hasKeyboardFocus(const SharedSurface.display(1)), isTrue);
+
+        // Dismissed: still running, its window off screen.
+        native.screen = const [];
+        async.elapse(const Duration(milliseconds: 50));
+        expect(r.hasKeyboardFocus(s), isTrue);
+      });
+    });
+
+    test('an unreadable window list counts as open', () {
+      native.windows[5] = window(pid: 42);
+      native.frontmost = 42;
+      native.panelPids = [spotlight];
+      native.screen = null;
+      expect(
+        MacosSurfaceResolver(native)
+            .hasKeyboardFocus(const SharedSurface.window(5)),
+        isFalse,
+      );
+    });
+  });
+
+  group('the host app\'s own windows (review H1)', () {
+    // FakeMacosNative.ownPid is 7.
+    MacosWindowRecord rec({
+      required int pid,
+      int layer = 0,
+      double alpha = 1,
+      Rect bounds = const Rect.fromLTWH(200, 200, 100, 100),
+    }) => MacosWindowRecord(
+      ownerPid: pid,
+      layer: layer,
+      alpha: alpha,
+      bounds: bounds,
+    );
+    const inside = Offset(250, 250);
+    const full = Rect.fromLTWH(0, 0, 1728, 1117);
+
+    test('a point on the host app\'s frontmost window is its own', () {
+      expect(macosIsOwnWindowAt(inside, [rec(pid: 7)], 7), isTrue);
+      expect(
+        macosIsOwnWindowAt(const Offset(150, 150), [rec(pid: 7)], 7),
+        isFalse,
+      );
+      expect(macosIsOwnWindowAt(inside, const [], 7), isFalse);
+    });
+
+    test('only the frontmost window at the point decides', () {
+      // Another app's window over the host's.
+      expect(
+        macosIsOwnWindowAt(inside, [rec(pid: 42), rec(pid: 7)], 7),
+        isFalse,
+      );
+      // The host's dialog over another app's window.
+      expect(
+        macosIsOwnWindowAt(inside, [
+          rec(pid: 7),
+          rec(pid: 42, bounds: full),
+        ], 7),
+        isTrue,
+      );
+      // Another app's window elsewhere doesn't matter.
+      expect(
+        macosIsOwnWindowAt(inside, [
+          rec(pid: 42, bounds: const Rect.fromLTWH(600, 600, 50, 50)),
+          rec(pid: 7),
+        ], 7),
+        isTrue,
+      );
+    });
+
+    test('floating panels count; levels 20 and up and clear windows not', () {
+      expect(macosIsOwnWindowAt(inside, [rec(pid: 7, layer: 3)], 7), isTrue);
+      // The Dock's and Notification Center's full-screen windows, the
+      // menu bar and the cursor don't hide the host's window below.
+      expect(
+        macosIsOwnWindowAt(inside, [
+          rec(
+            pid: 1,
+            layer: 2147483630,
+            bounds: const Rect.fromLTWH(240, 240, 32, 32),
+          ),
+          rec(pid: 2, layer: 21, bounds: full),
+          rec(pid: 3, layer: 20, bounds: full),
+          rec(pid: 7),
+        ], 7),
+        isTrue,
+      );
+      // A host border at .statusBar (25) over a whole display doesn't
+      // block the pointer.
+      expect(
+        macosIsOwnWindowAt(inside, [
+          rec(pid: 7, layer: 25, bounds: full),
+          rec(pid: 42, bounds: full),
+        ], 7),
+        isFalse,
+      );
+      expect(
+        macosIsOwnWindowAt(inside, [rec(pid: 7, alpha: 0), rec(pid: 42)], 7),
+        isFalse,
+      );
+      expect(
+        macosIsOwnWindowAt(inside, [rec(pid: 7, layer: -2147483603)], 7),
+        isFalse,
+      );
+    });
+
+    test('the resolver reads the on-screen list, cached for 50 ms', () {
+      fakeAsync((async) {
+        native.screen = [rec(pid: 7)];
+        final r = MacosSurfaceResolver(native);
+        for (var i = 0; i < 10; i++) {
+          expect(r.isOwnWindowAt(inside), isTrue);
+          expect(r.isOwnWindowAt(const Offset(10, 10)), isFalse);
+          async.elapse(const Duration(milliseconds: 4));
+        }
+        expect(native.screenReads, 1);
+        native.screen = [rec(pid: 42), rec(pid: 7)];
+        async.elapse(const Duration(milliseconds: 20));
+        expect(r.isOwnWindowAt(inside), isFalse);
+        expect(native.screenReads, 2);
+      });
+    });
+
+    test('an unreadable window list counts as the host\'s own', () {
+      native.screen = null;
+      expect(MacosSurfaceResolver(native).isOwnWindowAt(inside), isTrue);
+    });
+
+    test('the host app in front', () {
+      final r = MacosSurfaceResolver(native);
+      native.frontmost = 7;
+      expect(r.isOwnAppInFront(), isTrue);
+      native.frontmost = 42;
+      expect(r.isOwnAppInFront(), isFalse);
+      native.frontmost = -1;
+      expect(r.isOwnAppInFront(), isFalse);
+    });
+  });
+
   group('secure contexts', () {
     test('Secure Event Input blocks keys, not the pointer', () {
       final p = MacosSecureContext(native);
@@ -508,6 +701,40 @@ void main() {
         native.hid = const MacosActivityCounts(buttonDowns: 1);
         async.elapse(const Duration(milliseconds: 10));
         expect(session.state, const SessionPaused(PauseReason.localInput));
+        session.stop();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('the host\'s mouse pauses it while the viewer streams moves', () {
+      // Review M2: the viewer's moves keep putting the pointer where it
+      // wants, so only the HID move count shows the host's mouse.
+      fakeAsync((async) {
+        final pair = MemoryInputLink.pair();
+        final session = RemoteInputHost(platform: MacosHostPlatform(native))
+            .enable(link: pair.host, surface: const SharedSurface.display(1));
+        final viewer = RemoteInputViewer(link: pair.viewer);
+        async.elapse(const Duration(milliseconds: 20));
+        var t = 0;
+        void stream(int ms, {required bool mouse}) {
+          for (var end = t + ms; t < end; t += 4) {
+            // 250 Hz from the viewer, in a circle-ish path.
+            viewer.pointerMove(Offset(0.3 + (t % 400) / 1000, 0.5));
+            // 125 Hz from the host's mouse.
+            if (mouse && t % 8 == 0) {
+              native.hid = MacosActivityCounts(moves: native.hid.moves + 1);
+            }
+            async.elapse(const Duration(milliseconds: 4));
+          }
+        }
+
+        stream(500, mouse: false);
+        expect(session.state, const SessionActive());
+        expect(native.mouse, isNotEmpty);
+        final before = t;
+        stream(40, mouse: true);
+        expect(session.state, const SessionPaused(PauseReason.localInput));
+        expect(t - before, lessThanOrEqualTo(100));
         session.stop();
         async.flushMicrotasks();
       });

@@ -143,6 +143,10 @@ abstract interface class MacosNative {
 
   /// Posts a mouse event of `CGEventType` [type] at [point]. Returns a
   /// [MacosStatus].
+  ///
+  /// A button up is posted even when the cached [postAccess] says denied,
+  /// so a button never stays down; it still returns
+  /// [MacosStatus.permissionDenied] then.
   int postMouse(
     int type,
     Offset point, {
@@ -161,6 +165,10 @@ abstract interface class MacosNative {
   });
 
   /// Posts a key event for virtual key [keyCode]. Returns a [MacosStatus].
+  ///
+  /// A key up (a modifier's included) is posted even when the cached
+  /// [postAccess] says denied, so a key never stays down; it still returns
+  /// [MacosStatus.permissionDenied] then.
   int postKey(
     int keyCode, {
     required bool down,
@@ -183,6 +191,19 @@ abstract interface class MacosNative {
 
   /// Window [windowId] and the windows above it, or `null` if it's gone.
   MacosWindowInfo? windowInfo(int windowId);
+
+  /// Every on-screen window, front to back (`CGWindowListCopyWindowInfo`
+  /// with `kCGWindowListOptionOnScreenOnly`), or `null` if the list can't
+  /// be read. About 0.3 to 0.6 ms.
+  List<MacosWindowRecord>? onScreenWindows();
+
+  /// This process's id (`getpid()`).
+  int get ownPid;
+
+  /// The process ids of running apps whose non-activating panels take
+  /// keystrokes without becoming the frontmost app, and that show no other
+  /// window: Spotlight. Usually empty: Spotlight starts on demand.
+  List<int> keyboardPanelPids();
 
   /// The frontmost app's process id, or -1.
   int frontmostPid();

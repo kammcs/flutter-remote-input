@@ -4,6 +4,7 @@
 // macos_platform.dart, which only native (non-web) builds compile.
 
 import 'dart:ffi';
+import 'dart:io' show pid;
 import 'dart:ui' show Offset, Rect;
 
 import 'package:ffi/ffi.dart' show calloc;
@@ -64,6 +65,8 @@ typedef _WindowC = Int32 Function(
   Int32 capacity,
 );
 typedef _Window = int Function(int windowId, Pointer<Double> out, int capacity);
+typedef _PidsC = Int32 Function(Pointer<Int32> out, Int32 capacity);
+typedef _Pids = int Function(Pointer<Int32> out, int capacity);
 typedef _Int32C = Int32 Function();
 typedef _Int64C = Int64 Function();
 typedef _IntGet = int Function();
@@ -76,8 +79,12 @@ const String _probeSymbol = 'remote_input_post_access';
 /// The most displays read at once.
 const int _maxDisplays = 32;
 
-/// The most windows above a shared window that are read.
+/// The most windows read at once: above a shared window, or on screen
+/// (front to back, so any beyond are the backmost).
 const int _maxAbove = 512;
+
+/// The most keyboard-panel processes read at once.
+const int _maxPanelPids = 8;
 
 /// [MacosNative] through dart:ffi.
 final class FfiMacosNative implements MacosNative {
@@ -98,6 +105,12 @@ final class FfiMacosNative implements MacosNative {
       ),
       _window = lib.lookupFunction<_WindowC, _Window>(
         'remote_input_window_info',
+      ),
+      _windowList = lib.lookupFunction<_ListC, _List>(
+        'remote_input_window_list',
+      ),
+      _panels = lib.lookupFunction<_PidsC, _Pids>(
+        'remote_input_keyboard_panel_pids',
       ),
       _frontmost = lib.lookupFunction<_Int32C, _IntGet>(
         'remote_input_frontmost_pid',
@@ -130,6 +143,8 @@ final class FfiMacosNative implements MacosNative {
   final _List _displays;
   final _IntGet _generation;
   final _Window _window;
+  final _List _windowList;
+  final _Pids _panels;
   final _IntGet _frontmost;
   final _IntGet _secure;
   final _IntGet _session;
@@ -141,6 +156,7 @@ final class FfiMacosNative implements MacosNative {
   final Pointer<Double> _small = calloc<Double>(16);
   final Pointer<Double> _displayBuffer = calloc<Double>(_maxDisplays * 7);
   final Pointer<Double> _windowBuffer = calloc<Double>(7 + _maxAbove * 7);
+  final Pointer<Int32> _pidBuffer = calloc<Int32>(_maxPanelPids);
 
   @override
   bool postAccess({required bool fresh}) => _access(fresh ? 1 : 0) != 0;
@@ -222,21 +238,42 @@ final class FfiMacosNative implements MacosNative {
       onScreen: b[4] != 0,
       ownerPid: b[5].toInt(),
       scale: b[6],
-      above: [
-        for (var i = 0; i < count; i++)
-          MacosWindowRecord(
-            ownerPid: b[7 + i * 7].toInt(),
-            layer: b[7 + i * 7 + 1].toInt(),
-            alpha: b[7 + i * 7 + 2],
-            bounds: Rect.fromLTWH(
-              b[7 + i * 7 + 3],
-              b[7 + i * 7 + 4],
-              b[7 + i * 7 + 5],
-              b[7 + i * 7 + 6],
-            ),
-          ),
-      ],
+      above: _records(b + 7, count),
     );
+  }
+
+  @override
+  List<MacosWindowRecord>? onScreenWindows() {
+    final b = _windowBuffer;
+    final count = _windowList(b, _maxAbove);
+    if (count < 0) return null;
+    return _records(b, count);
+  }
+
+  /// [count] window records of 7 doubles each at [b].
+  static List<MacosWindowRecord> _records(Pointer<Double> b, int count) => [
+    for (var i = 0; i < count; i++)
+      MacosWindowRecord(
+        ownerPid: b[i * 7].toInt(),
+        layer: b[i * 7 + 1].toInt(),
+        alpha: b[i * 7 + 2],
+        bounds: Rect.fromLTWH(
+          b[i * 7 + 3],
+          b[i * 7 + 4],
+          b[i * 7 + 5],
+          b[i * 7 + 6],
+        ),
+      ),
+  ];
+
+  @override
+  int get ownPid => pid;
+
+  @override
+  List<int> keyboardPanelPids() {
+    final count = _panels(_pidBuffer, _maxPanelPids);
+    final n = count < _maxPanelPids ? count : _maxPanelPids;
+    return [for (var i = 0; i < n; i++) _pidBuffer[i]];
   }
 
   @override

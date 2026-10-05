@@ -57,6 +57,10 @@ final class FakeMacosNative implements MacosNative {
   int displayReads = 0;
   Map<int, MacosWindowInfo> windows = {};
   int windowReads = 0;
+
+  /// The on-screen windows, front to back; `null` when unreadable.
+  List<MacosWindowRecord>? screen = const [];
+  int screenReads = 0;
   int frontmost = -1;
   bool secure = false;
   int session = MacosSessionState.active;
@@ -138,6 +142,24 @@ final class FakeMacosNative implements MacosNative {
   MacosWindowInfo? windowInfo(int windowId) {
     windowReads++;
     return windows[windowId];
+  }
+
+  @override
+  List<MacosWindowRecord>? onScreenWindows() {
+    screenReads++;
+    return screen;
+  }
+
+  @override
+  int ownPid = 7;
+
+  List<int> panelPids = const [];
+  int panelReads = 0;
+
+  @override
+  List<int> keyboardPanelPids() {
+    panelReads++;
+    return panelPids;
   }
 
   @override

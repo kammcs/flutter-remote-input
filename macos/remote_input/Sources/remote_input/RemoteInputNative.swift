@@ -4,7 +4,8 @@
 // Every function here is exposed to Dart as a C symbol (`@_cdecl`) and called
 // synchronously through dart:ffi with `DynamicLibrary.process()`, from the
 // Dart UI thread. They only use Core Graphics, Carbon's
-// `IsSecureEventInputEnabled` and `NSWorkspace.frontmostApplication`, which
+// `IsSecureEventInputEnabled`, `NSWorkspace.frontmostApplication` and
+// `NSRunningApplication.runningApplications(withBundleIdentifier:)`, which
 // may be called from any thread.
 //
 // Privacy: nothing here logs. Key codes, text and positions pass through to
@@ -117,6 +118,16 @@ final class RemoteInputNative {
     let granted = CGPreflightPostEventAccess()
     storeAccess(granted)
     return granted
+  }
+
+  /// The status for a release (a key up, a modifier's flagsChanged up, or a
+  /// button up), which is posted whatever the cached access says: a stale
+  /// "denied" must never leave a key or button stuck down (review M5). If
+  /// the permission really is gone, the OS drops the event, as it would
+  /// anyway. Returns `permissionDenied` when the cache says so, so the
+  /// caller still learns that the permission seems to be missing.
+  func releaseStatus() -> Int32 {
+    hasPostAccess(fresh: false) ? RemoteInputStatus.ok : RemoteInputStatus.permissionDenied
   }
 
   func storeAccess(_ granted: Bool) {
@@ -235,13 +246,16 @@ public func remote_input_post_access(_ fresh: Int32) -> Int32 {
 /// Posts a mouse event of CGEventType [type] at ([x], [y]) in global
 /// display points. [button] is the CGMouseButton number (0 left, 1 right,
 /// 2 middle, 3 back, 4 forward); [clickState] is set when positive;
-/// [flags] are the held modifiers' CGEventFlags.
+/// [flags] are the held modifiers' CGEventFlags. A button up is posted even
+/// when the cached access says denied, so a button never stays down.
 @_cdecl("remote_input_post_mouse")
 public func remote_input_post_mouse(
   _ type: UInt32, _ x: Double, _ y: Double, _ button: Int32, _ clickState: Int32, _ flags: UInt64
 ) -> Int32 {
   let native = RemoteInputNative.shared
-  guard native.hasPostAccess(fresh: false) else { return RemoteInputStatus.permissionDenied }
+  let isRelease = remoteInputIsButtonUp(type)
+  let status = isRelease ? native.releaseStatus() : RemoteInputStatus.ok
+  guard isRelease || native.hasPostAccess(fresh: false) else { return RemoteInputStatus.permissionDenied }
   guard let source = native.source,
     let eventType = CGEventType(rawValue: type),
     let mouseButton = CGMouseButton(rawValue: UInt32(max(0, button))),
@@ -271,7 +285,13 @@ public func remote_input_post_mouse(
   }
   remoteInputApplyFlags(event, flags)
   native.post(event)
-  return RemoteInputStatus.ok
+  return status
+}
+
+/// Whether CGEventType [type] releases a mouse button.
+func remoteInputIsButtonUp(_ type: UInt32) -> Bool {
+  type == CGEventType.leftMouseUp.rawValue || type == CGEventType.rightMouseUp.rawValue
+    || type == CGEventType.otherMouseUp.rawValue
 }
 
 /// Posts a scroll event at ([x], [y]). [unit] is 0 for pixels and 1 for
@@ -296,13 +316,17 @@ public func remote_input_post_scroll(
 
 /// Posts a key event for virtual key [keyCode] (`kVK_*`). [autorepeat]
 /// marks a key repeat; [flags] are the modifiers held after this event.
-/// Modifier keys come out as `flagsChanged` events, as from a keyboard.
+/// Modifier keys come out as `flagsChanged` events, as from a keyboard. A
+/// key up (a modifier's included) is posted even when the cached access
+/// says denied, so a key never stays down.
 @_cdecl("remote_input_post_key")
 public func remote_input_post_key(
   _ keyCode: UInt16, _ down: Int32, _ autorepeat: Int32, _ flags: UInt64
 ) -> Int32 {
   let native = RemoteInputNative.shared
-  guard native.hasPostAccess(fresh: false) else { return RemoteInputStatus.permissionDenied }
+  let isRelease = down == 0
+  let status = isRelease ? native.releaseStatus() : RemoteInputStatus.ok
+  guard isRelease || native.hasPostAccess(fresh: false) else { return RemoteInputStatus.permissionDenied }
   guard let source = native.source,
     let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: down != 0)
   else { return RemoteInputStatus.failed }
@@ -311,7 +335,7 @@ public func remote_input_post_key(
   }
   remoteInputApplyFlags(event, flags)
   native.post(event)
-  return RemoteInputStatus.ok
+  return status
 }
 
 /// Types [length] UTF-16 code units (1 to 20; macOS truncates longer
@@ -410,11 +434,20 @@ public func remote_input_window_info(
     let above = CGWindowListCopyWindowInfo([.optionOnScreenAboveWindow, .excludeDesktopElements], windowId)
       as? [[String: Any]]
   else { return 0 }
+  return remoteInputWriteRecords(above, out + 7, capacity)
+}
+
+/// Writes up to [capacity] window records of 7 doubles to [out] (owner pid,
+/// layer, alpha, x, y, width, height), in the list's order. Returns how
+/// many were written.
+func remoteInputWriteRecords(
+  _ windows: [[String: Any]], _ out: UnsafeMutablePointer<Double>, _ capacity: Int32
+) -> Int32 {
   var written: Int32 = 0
-  for window in above {
+  for window in windows {
     if written >= capacity { break }
     guard let rect = remoteInputRect(window[kCGWindowBounds as String]) else { continue }
-    let base = out + 7 + Int(written) * 7
+    let base = out + Int(written) * 7
     base[0] = (window[kCGWindowOwnerPID as String] as? NSNumber)?.doubleValue ?? -1
     base[1] = (window[kCGWindowLayer as String] as? NSNumber)?.doubleValue ?? 0
     base[2] = (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
@@ -423,6 +456,45 @@ public func remote_input_window_info(
     base[5] = Double(rect.width)
     base[6] = Double(rect.height)
     written += 1
+  }
+  return written
+}
+
+/// Writes every on-screen window, front to back, to [out]: up to
+/// [capacity] records of 7 doubles, the same as `remote_input_window_info`
+/// writes for the windows above a window. Returns the number written, or -1
+/// if the list can't be read. No titles are read, so no Screen Recording
+/// permission is needed. About 0.3 to 0.6 ms with 25 windows (macOS 27).
+@_cdecl("remote_input_window_list")
+public func remote_input_window_list(_ out: UnsafeMutablePointer<Double>?, _ capacity: Int32) -> Int32 {
+  guard let out = out,
+    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+      as? [[String: Any]]
+  else { return -1 }
+  return remoteInputWriteRecords(list, out, max(0, capacity))
+}
+
+/// Apps whose non-activating panels take keystrokes without becoming
+/// `frontmostApplication` (review M4), and that own no on-screen window
+/// except that panel. Spotlight is an `LSUIElement` agent started on demand:
+/// at rest it isn't running, or its windows are off screen. Launchers with
+/// a permanent status item (Alfred, Raycast) would need their panel told
+/// apart from it, which the window list can't do without titles.
+let remoteInputKeyboardPanelApps = ["com.apple.Spotlight"]
+
+/// Writes the process ids of the running apps in
+/// `remoteInputKeyboardPanelApps` to [out], up to [capacity]. Returns how
+/// many were written. About 2 µs when none is running, 0.2 ms when one is.
+@_cdecl("remote_input_keyboard_panel_pids")
+public func remote_input_keyboard_panel_pids(_ out: UnsafeMutablePointer<Int32>?, _ capacity: Int32) -> Int32 {
+  guard let out = out else { return 0 }
+  var written: Int32 = 0
+  for bundleId in remoteInputKeyboardPanelApps {
+    for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleId) {
+      if written >= capacity { return written }
+      out[Int(written)] = app.processIdentifier
+      written += 1
+    }
   }
   return written
 }
@@ -499,6 +571,8 @@ func remoteInputKeepEntryPoints() -> [UnsafeRawPointer] {
   let generation: @convention(c) () -> Int64 = remote_input_display_generation
   let window: @convention(c) (UInt32, UnsafeMutablePointer<Double>?, Int32) -> Int32 =
     remote_input_window_info
+  let windows: @convention(c) (UnsafeMutablePointer<Double>?, Int32) -> Int32 = remote_input_window_list
+  let panels: @convention(c) (UnsafeMutablePointer<Int32>?, Int32) -> Int32 = remote_input_keyboard_panel_pids
   let frontmost: @convention(c) () -> Int32 = remote_input_frontmost_pid
   let secure: @convention(c) () -> Int32 = remote_input_secure_input
   let session: @convention(c) () -> Int32 = remote_input_session_state
@@ -513,6 +587,8 @@ func remoteInputKeepEntryPoints() -> [UnsafeRawPointer] {
     unsafeBitCast(displays, to: UnsafeRawPointer.self),
     unsafeBitCast(generation, to: UnsafeRawPointer.self),
     unsafeBitCast(window, to: UnsafeRawPointer.self),
+    unsafeBitCast(windows, to: UnsafeRawPointer.self),
+    unsafeBitCast(panels, to: UnsafeRawPointer.self),
     unsafeBitCast(frontmost, to: UnsafeRawPointer.self),
     unsafeBitCast(secure, to: UnsafeRawPointer.self),
     unsafeBitCast(session, to: UnsafeRawPointer.self),

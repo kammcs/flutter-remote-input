@@ -123,6 +123,106 @@ void main() {
     });
   });
 
+  group('sustained hardware moves (review M2)', () {
+    // The viewer streams moves at 250 Hz: before every poll the package
+    // has put the pointer somewhere new, so the distance rule measures from
+    // there and never sees the hardware's few points.
+    Offset injectedAt(int poll) => Offset(300.0 + poll * 7, 300);
+
+    test('count while the viewer moves the pointer', () {
+      d.update(snap(pointer: injectedAt(0)), ms(0));
+      var hidMoves = 0;
+      var firedAt = -1;
+      for (var poll = 1; poll <= 10 && firedAt < 0; poll++) {
+        d.noteInjectedPointer(injectedAt(poll));
+        // A 125 Hz mouse: one report per 10 ms poll, each nudging the
+        // pointer a point from where the package put it.
+        hidMoves++;
+        if (d.update(
+          snap(moves: hidMoves, pointer: injectedAt(poll) + const Offset(1, 0)),
+          ms(poll * 10),
+        )) {
+          firedAt = poll;
+        }
+      }
+      expect(firedAt, 3);
+    });
+
+    test('count wherever the pointer is', () {
+      d.update(snap(pointer: const Offset(100, 100)), ms(0));
+      expect(
+        d.update(snap(moves: 2, pointer: const Offset(100, 100)), ms(10)),
+        isFalse,
+      );
+      expect(
+        d.update(snap(moves: 3, pointer: const Offset(100, 100)), ms(20)),
+        isTrue,
+      );
+    });
+
+    test('a single jitter report does not', () {
+      d.update(snap(pointer: injectedAt(0)), ms(0));
+      for (var poll = 1; poll <= 30; poll++) {
+        d.noteInjectedPointer(injectedAt(poll));
+        expect(
+          d.update(snap(moves: 1, pointer: injectedAt(poll)), ms(poll * 10)),
+          isFalse,
+          reason: 'poll $poll',
+        );
+      }
+    });
+
+    test('a short burst within one poll does not, until it goes on', () {
+      d.update(snap(pointer: injectedAt(0)), ms(0));
+      d.noteInjectedPointer(injectedAt(1));
+      // Five reports from a 1000 Hz mouse in one poll: a bump.
+      expect(d.update(snap(moves: 5, pointer: injectedAt(1)), ms(10)), isFalse);
+      d.noteInjectedPointer(injectedAt(2));
+      expect(d.update(snap(moves: 5, pointer: injectedAt(2)), ms(20)), isFalse);
+      d.noteInjectedPointer(injectedAt(3));
+      // The movement continues into the next poll.
+      expect(d.update(snap(moves: 6, pointer: injectedAt(3)), ms(30)), isTrue);
+    });
+
+    test('reports spread thinner than the window do not', () {
+      d.update(snap(pointer: injectedAt(0)), ms(0));
+      var hidMoves = 0;
+      for (var poll = 1; poll <= 100; poll++) {
+        d.noteInjectedPointer(injectedAt(poll));
+        // One report every 60 ms: at most two within 100 ms.
+        if (poll % 6 == 0) hidMoves++;
+        expect(
+          d.update(
+            snap(moves: hidMoves, pointer: injectedAt(poll)),
+            ms(poll * 10),
+          ),
+          isFalse,
+          reason: 'poll $poll',
+        );
+      }
+    });
+
+    test('the package\'s own moves alone are not local input', () {
+      d.update(snap(pointer: injectedAt(0)), ms(0));
+      for (var poll = 1; poll <= 50; poll++) {
+        d.noteInjectedPointer(injectedAt(poll));
+        expect(
+          d.update(snap(pointer: injectedAt(poll)), ms(poll * 10)),
+          isFalse,
+        );
+      }
+    });
+
+    test('a detection starts a new count', () {
+      d.update(snap(), ms(0));
+      d.update(snap(moves: 2), ms(10));
+      expect(d.update(snap(moves: 3), ms(20)), isTrue);
+      expect(d.update(snap(moves: 4), ms(30)), isFalse);
+      expect(d.update(snap(moves: 5), ms(40)), isFalse);
+      expect(d.update(snap(moves: 6), ms(50)), isTrue);
+    });
+  });
+
   group('if the package\'s own events reach the HID counts', () {
     setUp(() => d = MacosActivityDetector(ownEventsReachHidState: true));
 
@@ -161,6 +261,47 @@ void main() {
         ),
         isTrue,
       );
+    });
+
+    test('the package\'s streamed moves are subtracted, local ones count', () {
+      Offset at(int poll) => Offset(300.0 + poll * 7, 300);
+      d.update(snap(pointer: at(0)), ms(0));
+      var own = 0;
+      var local = 0;
+      for (var poll = 1; poll <= 20; poll++) {
+        // 250 Hz from the viewer: 2 or 3 of the package's moves a poll,
+        // all of them in the HID counts too.
+        own += poll.isEven ? 3 : 2;
+        d.noteInjectedPointer(at(poll));
+        expect(
+          d.update(
+            snap(
+              moves: own,
+              pointer: at(poll),
+              own: MacosActivityCounts(moves: own),
+            ),
+            ms(poll * 10),
+          ),
+          isFalse,
+          reason: 'poll $poll',
+        );
+      }
+      var fired = false;
+      for (var poll = 21; poll <= 30 && !fired; poll++) {
+        own += poll.isEven ? 3 : 2;
+        local++;
+        d.noteInjectedPointer(at(poll));
+        fired = d.update(
+          snap(
+            moves: own + local,
+            pointer: at(poll),
+            own: MacosActivityCounts(moves: own),
+          ),
+          ms(poll * 10),
+        );
+      }
+      expect(fired, isTrue);
+      expect(local, 3);
     });
 
     test('an own event that never shows up stops masking', () {
