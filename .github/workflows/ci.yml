@@ -58,12 +58,21 @@ jobs:
   macos:
     runs-on: macos-latest
     steps:
+      # Checked out as `remote_input`, the package's name. Flutter names the
+      # plugin's Swift package link after the plugin's directory, and the
+      # runner's Xcode refuses a link whose name differs from the package's
+      # (Xcode 27.1 on the development Mac accepts it; design.md, open
+      # question 17).
       - uses: actions/checkout@v4
+        with:
+          path: remote_input
+      - run: xcodebuild -version
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: 3.47.3
           channel: stable
           cache: true
       - run: flutter pub get
+        working-directory: remote_input
       - run: flutter build macos --debug
-        working-directory: example
+        working-directory: remote_input/example
