@@ -5,10 +5,11 @@
 /// macOS replays it as local input ([RemoteInputHost], [ControlSession]),
 /// with safety controls: off by default, instant stop, local input wins.
 ///
-/// **Pre-release.** The protocol and the Dart core are built (roadmap M1);
-/// the Windows and macOS injectors and the capture widget are not yet, so
-/// [RemoteInputHost.isSupported] is false everywhere. The design is in
-/// `docs/design.md`: <https://github.com/kammcs/flutter-remote-input>.
+/// **Pre-release.** The protocol, the Dart core (roadmap M1) and the macOS
+/// injector (M3) are built; the Windows injector and the capture widget are
+/// not yet. On macOS the host needs the Accessibility permission
+/// ([RemoteInputPermissions]). The design is in `docs/design.md`:
+/// <https://github.com/kammcs/flutter-remote-input>.
 library;
 
 export 'src/host/host.dart' show RemoteInputHost;
@@ -31,6 +32,8 @@ export 'src/host/platform.dart'
 export 'src/host/session.dart' show ControlSession;
 export 'src/keys.dart' show HidModifier;
 export 'src/link.dart' show InputChannel, InputLink;
+export 'src/permissions.dart'
+    show RemoteInputPermissionStatus, RemoteInputPermissions;
 export 'src/protocol/wire_types.dart'
     show
         BlockReason,

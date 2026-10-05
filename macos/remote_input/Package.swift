@@ -30,6 +30,14 @@ let package = Package(
                 // If you have other resources that need to be bundled with your plugin, refer to
                 // the following instructions to add them:
                 // https://developer.apple.com/documentation/xcode/bundling-resources-with-a-swift-package
+            ],
+            // CGEventPost and the window list (CoreGraphics), Secure Event
+            // Input (Carbon's HIToolbox) and NSWorkspace (AppKit).
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("ApplicationServices"),
+                .linkedFramework("Carbon"),
+                .linkedFramework("CoreGraphics"),
             ]
         )
     ]
