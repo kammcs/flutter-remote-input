@@ -12,8 +12,11 @@ final class HostServer extends ChangeNotifier {
   static bool get isSupported => false;
 
   /// Throws an [UnsupportedError].
-  static Future<HostServer> start({int port = defaultHostPort}) =>
-      throw UnsupportedError('The host server needs dart:io');
+  static Future<HostServer> start({
+    int port = defaultHostPort,
+    Object? address,
+    Duration lockout = const Duration(seconds: 30),
+  }) => throw UnsupportedError('The host server needs dart:io');
 
   /// The port.
   int get port => 0;

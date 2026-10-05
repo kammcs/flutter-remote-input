@@ -348,7 +348,9 @@ class _HostPageState extends State<HostPage> {
             const SizedBox(height: 4),
             const Text(
               'The viewer\'s pointer is confined to this display. Keys go '
-              'to whichever window has focus, on any display.',
+              'to whichever window has focus, on any display. This app\'s '
+              'own windows are off limits: the viewer can\'t click in them, '
+              'and typing is blocked while this app is in front.',
             ),
             const SizedBox(height: 8),
             if (displays == null)
@@ -498,8 +500,9 @@ class _ConsentDialogState extends State<_ConsentDialog> {
           Text(
             'They will be able to move your pointer on the shared display '
             'and type into whichever window has focus, until you stop them '
-            'or ${controlExpiry.inMinutes} minutes pass. Touch your mouse or '
-            'keyboard at any time to pause them.',
+            'or ${controlExpiry.inMinutes} minutes pass. They can\'t click '
+            'or type in this app, so its Stop button stays yours. Touch '
+            'your mouse or keyboard at any time to pause them.',
           ),
           CheckboxListTile(
             contentPadding: EdgeInsets.zero,

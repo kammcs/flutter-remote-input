@@ -46,6 +46,10 @@ abstract final class PairingMessage {
 
   /// Host → viewer: another viewer is connected or waiting.
   static const String busy = 'busy';
+
+  /// Host → viewer: too many wrong codes from this address; try again in
+  /// `retryAfter` seconds.
+  static const String tooManyAttempts = 'tooManyAttempts';
 }
 
 /// One WebSocket to the other machine: the pairing messages, then an
@@ -53,7 +57,8 @@ abstract final class PairingMessage {
 ///
 /// The link's channels are closed until [openLink] is called, which each
 /// side does once the host has said [PairingMessage.accepted]. A few binary
-/// frames that arrive before that are kept for it; more are dropped.
+/// frames that arrive before that are kept for it ([maxEarlyFrames], up to
+/// [maxEarlyBytes]); a peer that sends more closes the socket.
 final class SocketConnection {
   /// Wraps [socket], which must already be connected.
   SocketConnection(this._socket) {
@@ -74,11 +79,18 @@ final class SocketConnection {
   bool _linkOpen = false;
   bool _closed = false;
 
+  /// The most binary frames kept before [openLink].
+  static const int maxEarlyFrames = 16;
+
+  /// The most bytes of binary frames kept before [openLink].
+  static const int maxEarlyBytes = 64 * 1024;
+
   // Binary frames that arrived before [openLink]: the host's first message
-  // can overtake the viewer's handling of the pairing answer. Bounded, so a
-  // peer can't make the other side buffer before consent.
+  // can overtake the viewer's handling of the pairing answer. Bounded by
+  // count and bytes, so a peer can't make the other side buffer before
+  // consent; past either bound the socket is dropped.
   final List<Uint8List> _early = [];
-  static const int _maxEarlyFrames = 16;
+  int _earlyBytes = 0;
 
   late final _SocketChannel _reliable = _SocketChannel(
     this,
@@ -116,6 +128,7 @@ final class SocketConnection {
       _deliver(frame);
     }
     _early.clear();
+    _earlyBytes = 0;
   }
 
   /// Closes the socket. The link's channels close with it.
@@ -157,8 +170,13 @@ final class SocketConnection {
     if (bytes == null || bytes.isEmpty) return;
     if (_linkOpen) {
       _deliver(bytes);
-    } else if (_early.length < _maxEarlyFrames) {
+    } else if (_early.length < maxEarlyFrames &&
+        _earlyBytes + bytes.length <= maxEarlyBytes) {
       _early.add(bytes);
+      _earlyBytes += bytes.length;
+    } else {
+      // Nothing legitimate sends this much before consent.
+      unawaited(close());
     }
   }
 
@@ -176,6 +194,7 @@ final class SocketConnection {
     if (_closed) return;
     _closed = true;
     _early.clear();
+    _earlyBytes = 0;
     unawaited(_subscription.cancel());
     if (_linkOpen) _openChanges.add(false);
     unawaited(_openChanges.close());

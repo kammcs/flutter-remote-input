@@ -24,6 +24,13 @@ enum PairingFailure {
   /// Another viewer is connected or waiting.
   busy('Someone else is controlling, or asking to control, that computer.'),
 
+  /// Too many wrong codes from this device: the host refuses it for a
+  /// while ([PairingException.retryAfter]).
+  tooManyAttempts(
+    'Too many wrong codes from this device. Wait, then enter the code the '
+    'host shows.',
+  ),
+
   /// No answer in time.
   timeout('No answer from the host in time.'),
 
@@ -39,10 +46,23 @@ enum PairingFailure {
 /// Thrown by [connectToHost].
 final class PairingException implements Exception {
   /// Creates a [PairingException].
-  const PairingException(this.failure);
+  const PairingException(this.failure, {this.retryAfter});
 
   /// Why.
   final PairingFailure failure;
+
+  /// For [PairingFailure.tooManyAttempts]: how long until the host takes a
+  /// code from this device again, if it said.
+  final Duration? retryAfter;
+
+  /// [failure]'s message, with the wait if the host gave one.
+  String get message {
+    final wait = retryAfter;
+    if (wait == null) return failure.message;
+    final s = wait.inSeconds;
+    final text = s < 120 ? '$s seconds' : '${(s / 60).ceil()} minutes';
+    return '${failure.message} Try again in $text.';
+  }
 
   @override
   String toString() => 'PairingException(${failure.name})';
@@ -83,6 +103,7 @@ Future<SocketConnection> connectToHost(
   }
   final connection = SocketConnection(socket);
   final answer = Completer<PairingFailure?>();
+  Duration? retryAfter;
   final sub = connection.control.listen((m) {
     if (answer.isCompleted) return;
     switch (m['type']) {
@@ -94,6 +115,12 @@ Future<SocketConnection> connectToHost(
         answer.complete(PairingFailure.badCode);
       case PairingMessage.busy:
         answer.complete(PairingFailure.busy);
+      case PairingMessage.tooManyAttempts:
+        final seconds = m['retryAfter'];
+        if (seconds is int && seconds >= 0 && seconds <= 24 * 3600) {
+          retryAfter = Duration(seconds: seconds);
+        }
+        answer.complete(PairingFailure.tooManyAttempts);
     }
   });
   unawaited(
@@ -121,7 +148,10 @@ Future<SocketConnection> connectToHost(
   }
   if (failure != null) {
     await connection.close();
-    throw PairingException(failure);
+    throw PairingException(
+      failure,
+      retryAfter: failure == PairingFailure.tooManyAttempts ? retryAfter : null,
+    );
   }
   connection.openLink();
   return connection;

@@ -77,13 +77,22 @@ String _stopped(StopReason reason, bool host) => switch (reason) {
 /// A coloured chip with the session's state in words.
 class SessionStateChip extends StatelessWidget {
   /// Creates a chip for [state], described from [side].
-  const SessionStateChip({super.key, required this.state, required this.side});
+  const SessionStateChip({
+    super.key,
+    required this.state,
+    required this.side,
+    this.iconOnly = false,
+  });
 
   /// The state.
   final SessionState state;
 
   /// Whose point of view.
   final Side side;
+
+  /// Whether to show only the icon in a coloured circle, for a narrow
+  /// strip; the words are its semantics value.
+  final bool iconOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -115,6 +124,20 @@ class SessionStateChip extends StatelessWidget {
         scheme.onSecondaryContainer,
       ),
     };
+    if (iconOnly) {
+      return Semantics(
+        container: true,
+        label: 'Session state',
+        value: describeState(state, side),
+        child: DecoratedBox(
+          decoration: BoxDecoration(color: background, shape: BoxShape.circle),
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Icon(icon, size: 20, color: foreground),
+          ),
+        ),
+      );
+    }
     return Semantics(
       container: true,
       label: 'Session state',
