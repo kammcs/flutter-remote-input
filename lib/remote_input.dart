@@ -1,15 +1,18 @@
 /// Remote keyboard and mouse control for Flutter apps.
 ///
 /// A **viewer** on any platform sends pointer and keyboard input over a
-/// link the app provides ([RemoteInputViewer]); the **host** on Windows or
-/// macOS replays it as local input ([RemoteInputHost], [ControlSession]),
-/// with safety controls: off by default, instant stop, local input wins.
+/// link the app provides ([RemoteInputViewer]), captured over the remote
+/// view by [RemoteInputCapture] (with a [RemoteKeyBar] for phones); the
+/// **host** on Windows or macOS replays it as local input
+/// ([RemoteInputHost], [ControlSession]), with safety controls: off by
+/// default, instant stop, local input wins.
 ///
-/// **Pre-release.** The protocol, the Dart core (roadmap M1) and the macOS
-/// injector (M3) are built; the Windows injector and the capture widget are
-/// not yet. On macOS the host needs the Accessibility permission
-/// ([RemoteInputPermissions]). The design is in `docs/design.md`:
-/// <https://github.com/kammcs/flutter-remote-input>.
+/// **Pre-release.** Everything is built: the protocol and the Dart core
+/// (roadmap M1), the Windows (M2) and macOS (M3) injectors, the capture
+/// widget (M4) and the native safety checks (M5). Device checks are pending
+/// (`docs/checkpoint.md`). On macOS the host needs the Accessibility
+/// permission ([RemoteInputPermissions]). The design is in
+/// `docs/design.md`: <https://github.com/kammcs/flutter-remote-input>.
 library;
 
 export 'src/host/host.dart' show RemoteInputHost;
@@ -61,5 +64,13 @@ export 'src/surface.dart'
         SharedSurface,
         SurfaceGeometry,
         WindowSurface;
+export 'src/viewer/capture/capture.dart'
+    show
+        RemoteInputCapture,
+        RemoteInputCaptureController,
+        RemoteKeyBar,
+        StickyModifierState,
+        TouchMode;
+export 'src/viewer/capture/key_routing.dart' show KeyboardMode;
 export 'src/viewer/viewer.dart'
     show RemoteInputViewer, RemoteSurface, ViewerOptions, ViewerStats;

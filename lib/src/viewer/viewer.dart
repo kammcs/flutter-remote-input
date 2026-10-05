@@ -198,8 +198,12 @@ final class RemoteInputViewer {
     roundTripP95: _rttPercentile(0.95),
   );
 
-  /// The host's OS, from its latest handshake: for labels like "Cmd" or
-  /// "Win", and "Controlling a Mac".
+  /// The OS this viewer reports in the handshake: [ViewerOptions.platform],
+  /// or the one it runs on.
+  PeerPlatform get platform => _platform;
+
+  /// The host's OS, from its latest handshake; `null` until the first one.
+  /// For labels like "Cmd" or "Win", and "Controlling a Mac".
   PeerPlatform? get hostPlatform => _hostPlatform;
 
   Duration? _rttPercentile(double p) {
