@@ -20,6 +20,8 @@ set(PLUGIN_NAME "remote_input_plugin")
 list(APPEND PLUGIN_SOURCES
   "remote_input_plugin.cpp"
   "remote_input_plugin.h"
+  "remote_input_native.cpp"
+  "remote_input_native.h"
 )
 
 # Define the plugin library target. Its name must not be changed (see comment
@@ -47,6 +49,8 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
+# SendInput and the low-level hooks (remote_input_native.cpp).
+target_link_libraries(${PLUGIN_NAME} PRIVATE user32)
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an
@@ -89,7 +93,7 @@ add_executable(${TEST_RUNNER}
 apply_standard_settings(${TEST_RUNNER})
 target_include_directories(${TEST_RUNNER} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(${TEST_RUNNER} PRIVATE flutter_wrapper_plugin)
-target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main gmock)
+target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main gmock user32)
 # flutter_wrapper_plugin has link dependencies on the Flutter DLL.
 add_custom_command(TARGET ${TEST_RUNNER} POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different

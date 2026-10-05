@@ -1,16 +1,17 @@
 #ifndef FLUTTER_PLUGIN_REMOTE_INPUT_PLUGIN_H_
 #define FLUTTER_PLUGIN_REMOTE_INPUT_PLUGIN_H_
 
-#include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
-
-#include <memory>
 
 namespace remote_input {
 
+// Registers the plugin with the app, which makes Flutter build and load
+// remote_input_plugin.dll. Everything else goes through dart:ffi to the C
+// API in remote_input_native.h: injection is synchronous, with no platform
+// channel (docs/design.md §7.1).
 class RemoteInputPlugin : public flutter::Plugin {
  public:
-  static void RegisterWithRegistrar(flutter::PluginRegistrarWindows *registrar);
+  static void RegisterWithRegistrar(flutter::PluginRegistrarWindows* registrar);
 
   RemoteInputPlugin();
 
@@ -19,11 +20,6 @@ class RemoteInputPlugin : public flutter::Plugin {
   // Disallow copy and assign.
   RemoteInputPlugin(const RemoteInputPlugin&) = delete;
   RemoteInputPlugin& operator=(const RemoteInputPlugin&) = delete;
-
-  // Called when a method is called on this plugin's channel from Dart.
-  void HandleMethodCall(
-      const flutter::MethodCall<flutter::EncodableValue> &method_call,
-      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 };
 
 }  // namespace remote_input

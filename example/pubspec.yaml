@@ -13,6 +13,8 @@ dependencies:
     path: ../
 
 dev_dependencies:
+  # The Windows injection test's own Win32 calls.
+  ffi: ^2.2.0
   flutter_lints: ^6.0.0
   flutter_test:
     sdk: flutter
