@@ -1,42 +1,68 @@
 // macOS Accessibility onboarding for the host (docs/design.md §7.3).
 //
-// Whether the permission is missing comes from the package already:
+// Whether the permission is missing comes from the host:
 // `RemoteInputHost.checkAvailable()` returns
 // `HostUnavailableReason.permissionDenied` (the host screen checks it).
-// Asking for it and opening System Settings need `RemoteInputPermissions`,
-// which lands with roadmap M3.
-//
-// TODO(M3): when `RemoteInputPermissions` is exported, fill in the two
-// functions below:
-//   requestPermission      -> `await RemoteInputPermissions.request();`
-//   openPermissionSettings -> `await RemoteInputPermissions.openSettings();`
-// and, optionally, have [PermissionOnboarding] listen to
-// `RemoteInputPermissions.statusChanges` to call `onCheckAgain` by itself.
-// Never call them from tests: they show a system prompt.
-import 'package:flutter/material.dart';
+// `RemoteInputPermissions` asks for it, opens System Settings and reports the
+// grant. Never call them from tests: `request()` shows a system prompt.
+import 'dart:async';
 
-/// Shows macOS's prompt to allow this app to control the computer.
+import 'package:flutter/material.dart';
+import 'package:remote_input/remote_input.dart';
+
+/// Shows macOS's prompt to allow this app to control the computer (the
+/// first time only; after that, people use System Settings).
 Future<void> requestPermission() async {
-  // TODO(M3): await RemoteInputPermissions.request();
+  await RemoteInputPermissions.request();
 }
 
 /// Opens System Settings at Privacy & Security → Accessibility.
 Future<void> openPermissionSettings() async {
-  // TODO(M3): await RemoteInputPermissions.openSettings();
+  await RemoteInputPermissions.openSettings();
 }
-
-/// Whether [requestPermission] and [openPermissionSettings] do anything
-/// yet. TODO(M3): remove with the TODOs above.
-const bool permissionApiAvailable = false;
 
 /// Explains the Accessibility permission and helps grant it. Shown by the
 /// host screen while the host reports the permission missing.
-class PermissionOnboarding extends StatelessWidget {
-  /// Creates the onboarding card. [onCheckAgain] re-checks the permission.
-  const PermissionOnboarding({super.key, required this.onCheckAgain});
+class PermissionOnboarding extends StatefulWidget {
+  /// Creates the onboarding card. [onCheckAgain] re-checks the permission;
+  /// it's also called when macOS reports the grant. [watch] follows
+  /// `RemoteInputPermissions.statusChanges` (off in tests).
+  const PermissionOnboarding({
+    super.key,
+    required this.onCheckAgain,
+    this.watch = true,
+  });
 
   /// Called to check the permission again.
   final VoidCallback onCheckAgain;
+
+  /// Whether to follow the permission's status while shown.
+  final bool watch;
+
+  @override
+  State<PermissionOnboarding> createState() => _PermissionOnboardingState();
+}
+
+class _PermissionOnboardingState extends State<PermissionOnboarding> {
+  StreamSubscription<RemoteInputPermissionStatus>? _status;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.watch) {
+      _status = RemoteInputPermissions.statusChanges.listen((s) {
+        if (s == RemoteInputPermissionStatus.granted) widget.onCheckAgain();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _status?.cancel();
+    super.dispose();
+  }
+
+  VoidCallback get onCheckAgain => widget.onCheckAgain;
 
   @override
   Widget build(BuildContext context) {
@@ -72,18 +98,14 @@ class PermissionOnboarding extends StatelessWidget {
               runSpacing: 8,
               children: [
                 FilledButton(
-                  onPressed: permissionApiAvailable
-                      ? () async {
-                          await requestPermission();
-                          onCheckAgain();
-                        }
-                      : null,
+                  onPressed: () async {
+                    await requestPermission();
+                    onCheckAgain();
+                  },
                   child: const Text('Ask macOS'),
                 ),
                 OutlinedButton(
-                  onPressed: permissionApiAvailable
-                      ? openPermissionSettings
-                      : null,
+                  onPressed: openPermissionSettings,
                   child: const Text('Open System Settings'),
                 ),
                 TextButton(
