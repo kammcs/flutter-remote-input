@@ -103,8 +103,9 @@ final class DisplayInfo {
     required this.isPrimary,
   });
 
-  /// The display's id: a `CGDirectDisplayID` on macOS, an index into the
-  /// monitor list on Windows.
+  /// The display's id: a `CGDirectDisplayID` on macOS; on Windows, the
+  /// number in the monitor's device name (`\\.\DISPLAY2` is 2), which
+  /// normally stays with the monitor while others are added or removed.
   final int id;
 
   /// Its bounds, in desktop coordinates ([SharedSurface]).
