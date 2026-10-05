@@ -174,6 +174,10 @@ enum BlockReason {
   /// The shared window is minimized or hidden.
   surfaceHidden(5),
 
+  /// The shared window isn't in front, so keys would go to another window.
+  /// Blocks keys only; the pointer continues.
+  windowNotInFront(6),
+
   /// A reason this version doesn't know, from a newer host.
   other(255);
 
@@ -183,7 +187,7 @@ enum BlockReason {
   final int code;
 
   /// Whether this blocks pointer input as well as keys.
-  bool get blocksPointer => this != secureInput;
+  bool get blocksPointer => this != secureInput && this != windowNotInFront;
 
   /// The reason with [code]; [other] for codes this version doesn't know.
   static BlockReason fromCode(int code) =>

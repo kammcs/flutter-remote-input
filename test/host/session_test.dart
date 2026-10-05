@@ -909,6 +909,16 @@ void main() {
         rig.viewer.key(usageA, KeyAction.down);
         rig.flush();
         expect(rig.dropped(DropReason.notFocused), 1);
+        expect(
+          rig.session.state,
+          const SessionBlocked(BlockReason.windowNotInFront),
+        );
+        rig.viewer.move(20, 20, buttons: PointerButton.left.mask);
+        rig.flush();
+        expect(rig.events.last, isA<InjectedMove>()); // the pointer continues
+        platform.surfaces.keyboardFocus = true;
+        rig.elapse(const Duration(milliseconds: 300));
+        expect(rig.session.state, const SessionActive());
 
         platform.surfaces.windows[7] = const SurfaceGeometry(
           bounds: Rect.fromLTWH(0, 0, 800, 600),

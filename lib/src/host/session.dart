@@ -322,7 +322,13 @@ final class ControlSession {
   void _update() {
     final next = _deriveState();
     if (next == _state.value) return;
-    if (next is SessionPaused || next is SessionBlocked) {
+    if (next is SessionBlocked && !next.reason.blocksPointer) {
+      // Keys only: the pointer, and a drag in progress, carry on.
+      for (final usage in _heldKeys.toList()) {
+        _releaseKey(usage);
+      }
+      _queue.removeWhere((m) => m is KeyMessage || m is TextMessage);
+    } else if (next is SessionPaused || next is SessionBlocked) {
       _releaseHeld();
       _queue.clear();
       _dropPendingMove(DropReason.inactive);
@@ -382,6 +388,10 @@ final class ControlSession {
   void _pollBlock() {
     final blocked = _blocked;
     if (_stopped || blocked == null) return;
+    if (blocked == BlockReason.windowNotInFront) {
+      if (_hasKeyboardFocus()) _clearBlocked();
+      return;
+    }
     if (blocked == BlockReason.surfaceHidden) {
       final g = _geometryOf(_surface);
       if (g == null) {
@@ -766,10 +776,7 @@ final class ControlSession {
         if (!filter(press)) return _drop(DropReason.filtered);
       }
     }
-    if (!_hasKeyboardFocus()) return _drop(DropReason.notFocused);
-    if (!_secureAllows(InputKind.keyboard, null)) {
-      return _drop(DropReason.inactive);
-    }
+    if (!_keyboardAllowed()) return;
     final r = _inject(
       InputKind.keyboard,
       () => _platform.injector.key(usage, down: true, repeat: repeat),
@@ -781,11 +788,25 @@ final class ControlSession {
   }
 
   void _dispatchText(String text) {
-    if (!_hasKeyboardFocus()) return _drop(DropReason.notFocused);
-    if (!_secureAllows(InputKind.keyboard, null)) {
-      return _drop(DropReason.inactive);
-    }
+    if (!_keyboardAllowed()) return;
     _inject(InputKind.keyboard, () => _platform.injector.text(text));
+  }
+
+  /// Whether keys and text may be injected now: the shared window is in
+  /// front and no secure context blocks them. Updates the blocked state and
+  /// counts the drop when they may not.
+  bool _keyboardAllowed() {
+    if (!_hasKeyboardFocus()) {
+      _drop(DropReason.notFocused);
+      _setBlocked(BlockReason.windowNotInFront, InputKind.keyboard);
+      return false;
+    }
+    if (_blocked == BlockReason.windowNotInFront) _clearBlocked();
+    if (!_secureAllows(InputKind.keyboard, null)) {
+      _drop(DropReason.inactive);
+      return false;
+    }
+    return true;
   }
 
   /// Calls the injector, unless the session has stopped: the stop flag is

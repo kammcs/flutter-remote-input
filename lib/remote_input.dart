@@ -12,6 +12,7 @@
 library;
 
 export 'src/host/host.dart' show RemoteInputHost;
+export 'src/host/limitations.dart' show HostLimitation;
 export 'src/host/host_types.dart'
     show DropReason, KeyPress, SessionStats, ViolationKind;
 export 'src/host/options.dart'

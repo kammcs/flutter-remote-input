@@ -1,5 +1,10 @@
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
+
 import '../link.dart';
+import '../protocol/wire_types.dart';
 import '../surface.dart';
+import 'limitations.dart';
 import 'options.dart';
 import 'platform.dart';
 import 'platform_default.dart';
@@ -42,6 +47,15 @@ final class RemoteInputHost {
   /// Whether this platform can inject input (Windows and macOS, once their
   /// injectors land: roadmap M2 and M3).
   static bool get isSupported => defaultHostPlatform() != null;
+
+  /// What a host on this device can't control, for the app's UI
+  /// (`docs/design.md` §7.4).
+  static List<HostLimitation> get limitations =>
+      HostLimitation.forPlatform(switch (defaultTargetPlatform) {
+        TargetPlatform.windows => PeerPlatform.windows,
+        TargetPlatform.macOS => PeerPlatform.macos,
+        _ => PeerPlatform.unknown,
+      }, isWeb: kIsWeb);
 
   /// The live session in this process, if any.
   static ControlSession? get activeSession => _live;
