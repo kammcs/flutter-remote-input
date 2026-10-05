@@ -8,6 +8,8 @@
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
 	<string>Remote Input Example</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Connects to a computer on your network that runs this example as the host, so you can control it.</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

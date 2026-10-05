@@ -1,0 +1,22 @@
+name: remote_input_cloudflare_realtime
+description: "Reference adapter: a remote_input InputLink over cloudflare_realtime's DataChannels. An example to copy into an app, not a published package."
+publish_to: none
+version: 0.0.1
+
+environment:
+  sdk: ^3.13.0
+  flutter: ">=3.47.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Unpinned here, so the reference tracks the current API; an app pins a
+  # commit (`ref:`), as the first consumer does.
+  cloudflare_realtime:
+    git:
+      url: https://github.com/kammcs/flutter-cloudflare-realtime
+  remote_input:
+    path: ../..
+
+dev_dependencies:
+  flutter_lints: ^6.0.0

@@ -1,38 +1,56 @@
+import 'dart:ui' show AppExitResponse;
+
 import 'package:flutter/material.dart';
 import 'package:remote_input/remote_input.dart';
+
+import 'home_page.dart';
 
 void main() {
   runApp(const RemoteInputExampleApp());
 }
 
-/// The example app's shell. Milestone M6 (`docs/roadmap.md`) turns it into
-/// a host that injects and a viewer that captures, on two machines.
-class RemoteInputExampleApp extends StatelessWidget {
+/// The example app: host this computer, control another one, or try both
+/// sides on one device.
+class RemoteInputExampleApp extends StatefulWidget {
   /// Creates the app.
   const RemoteInputExampleApp({super.key});
 
   @override
+  State<RemoteInputExampleApp> createState() => _RemoteInputExampleAppState();
+}
+
+class _RemoteInputExampleAppState extends State<RemoteInputExampleApp> {
+  late final AppLifecycleListener _lifecycle;
+
+  @override
+  void initState() {
+    super.initState();
+    // Whatever happens to the app, control stops with it
+    // (docs/design.md §6.2).
+    _lifecycle = AppLifecycleListener(
+      onDetach: RemoteInputHost.stopAll,
+      onExitRequested: () async {
+        RemoteInputHost.stopAll();
+        return AppExitResponse.exit;
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    const seed = Color(0xFF2C6BED);
     return MaterialApp(
       title: 'remote_input example',
-      home: Scaffold(
-        appBar: AppBar(title: const Text('remote_input example')),
-        body: const Padding(
-          padding: EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Protocol version $remoteInputProtocolVersion'),
-              SizedBox(height: 8),
-              Text(
-                'Host (Windows, macOS): shares a surface and injects the '
-                "viewer's input. Viewer (any platform): captures input over "
-                'the remote view. Both arrive with milestone M6.',
-              ),
-            ],
-          ),
-        ),
-      ),
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(colorSchemeSeed: seed),
+      darkTheme: ThemeData(colorSchemeSeed: seed, brightness: Brightness.dark),
+      home: const HomePage(),
     );
   }
 }

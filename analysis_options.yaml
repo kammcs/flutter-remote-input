@@ -3,6 +3,7 @@ include: package:flutter_lints/flutter.yaml
 analyzer:
   exclude:
     - build/**
+    - example/cloudflare_realtime_adapter/**
     - .claude/**
     - android/**
     - ios/**

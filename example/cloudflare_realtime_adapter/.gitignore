@@ -1,0 +1,4 @@
+.dart_tool/
+build/
+# A reference package: apps resolve their own versions.
+pubspec.lock
