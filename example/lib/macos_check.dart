@@ -102,7 +102,13 @@ class _MacosCheckPageState extends State<MacosCheckPage> {
       final pair = MemoryInputLink.pair();
       final ControlSession session;
       try {
-        session = RemoteInputHost().enable(link: pair.host, surface: surface);
+        // Some checks type into this page itself, which the host otherwise
+        // protects (HostOptions.protectHostWindows).
+        session = RemoteInputHost().enable(
+          link: pair.host,
+          surface: surface,
+          options: const HostOptions(protectHostWindows: false),
+        );
       } on HostUnavailableException catch (e) {
         _say('$name: host unavailable (${e.reason.name})');
         return;

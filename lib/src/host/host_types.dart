@@ -48,13 +48,18 @@ enum DropReason {
   /// More keys held than `InputLimits.maxHeldKeys`.
   tooManyKeys,
 
-  /// A release or repeat of a key or button the session doesn't hold.
+  /// A release or repeat of a key or button the session doesn't hold, or a
+  /// press of one it already holds.
   notHeld,
 
   /// A key with no mapping on this platform.
   unmapped,
 
-  /// The OS refused it.
+  /// Over the host app's own windows, or keys while it's in front
+  /// (`HostOptions.protectHostWindows`).
+  hostWindow,
+
+  /// The OS refused it, or the surface's bounds were unusable.
   failed,
 }
 

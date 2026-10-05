@@ -126,6 +126,9 @@ void main() {
       session = host.enable(
         link: pair.host,
         surface: SharedSurface.window(windowId, contentInsets: insets),
+        // The test injects into its own window, which the host otherwise
+        // protects (HostOptions.protectHostWindows).
+        options: const HostOptions(protectHostWindows: false),
       );
       session.stateChanges.listen(states.add);
       viewer = RemoteInputViewer(link: pair.viewer);

@@ -73,6 +73,9 @@ void main() {
         hwnd,
         contentInsets: h.geometry.clientInsets,
       ),
+      // The test injects into its own window, which the host otherwise
+      // protects (HostOptions.protectHostWindows).
+      options: const HostOptions(protectHostWindows: false),
     );
     h.viewer = RemoteInputViewer(link: pair.viewer);
     final active = await _waitFor(

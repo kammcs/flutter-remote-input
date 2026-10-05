@@ -331,7 +331,9 @@ const int _maxU64Value = 0x1FFFFFFFFFFFFF;
 
 void _checkRange(String name, int value, int max, {int min = 0}) {
   if (value < min || value > max) {
-    throw RangeError.range(value, min, max, name);
+    // No value in the message: it may be a key code or a position
+    // (docs/design.md §6.6).
+    throw RangeError('$name is out of range $min..$max');
   }
 }
 

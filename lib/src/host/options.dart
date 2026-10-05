@@ -108,6 +108,7 @@ final class HostOptions {
     this.modifierMapping = ModifierMapping.auto,
     this.keyFilter,
     this.limits,
+    this.protectHostWindows = true,
   });
 
   /// When the session stops by itself, with `StopReason.expired`: a local
@@ -137,4 +138,11 @@ final class HostOptions {
 
   /// Rate limits and bounds; `null` for the defaults.
   final InputLimits? limits;
+
+  /// Whether the viewer is kept out of the host app's own windows: pointer
+  /// input over them is dropped, and keys are blocked while the host app is
+  /// in front, so a viewer can't click its consent dialog, its Stop button
+  /// or its chat. On by default; only tests that inject into their own
+  /// window turn it off.
+  final bool protectHostWindows;
 }

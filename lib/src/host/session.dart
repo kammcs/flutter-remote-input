@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:math';
 import 'dart:typed_data';
-import 'dart:ui' show Offset;
+import 'dart:ui' show Offset, Rect;
 
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart' show listEquals;
@@ -38,7 +38,16 @@ ControlSession createControlSession({
   required SharedSurface surface,
   required HostOptions options,
   required void Function(ControlSession) onStopped,
-}) => ControlSession._(platform, link, surface, options, onStopped).._start();
+}) {
+  final session = ControlSession._(platform, link, surface, options, onStopped);
+  try {
+    session._start();
+  } catch (_) {
+    session._stop(StopReason.byHost);
+    rethrow;
+  }
+  return session;
+}
 
 /// Stops [session] for `RemoteInputHost.stopAll`. Internal.
 void stopSessionForAll(ControlSession? session) =>
@@ -106,6 +115,13 @@ final class ControlSession {
   Offset? _lastPointerPoint;
   final Set<int> _heldKeys = <int>{};
   final Set<PointerButton> _heldButtons = <PointerButton>{};
+
+  // Releases the OS refused (a secure desktop, a revoked permission),
+  // retried until they go through (`_retryReleases`).
+  final Set<int> _unreleasedKeys = <int>{};
+  final Set<PointerButton> _unreleasedButtons = <PointerButton>{};
+
+  final TokenBucket _pingBucket = TokenBucket(rate: 10, burst: 20);
 
   final ListQueue<InputMessage> _queue = ListQueue();
   late final TokenBucket _eventBucket;
@@ -313,7 +329,7 @@ final class ControlSession {
     _queue.clear();
     _pendingMove = null;
     _releaseHeld();
-    if (_helloSent) _sendState(SessionStopped(reason));
+    _retryReleases();
     for (final s in _subscriptions) {
       s.cancel();
     }
@@ -321,6 +337,9 @@ final class ControlSession {
     _state.set(SessionStopped(reason));
     _state.close();
     _onStopped(this);
+    // Last, and never throwing: the session is already stopped whatever the
+    // transport does.
+    if (_helloSent) _sendState(SessionStopped(reason));
   }
 
   // --- State ----------------------------------------------------------------
@@ -358,6 +377,7 @@ final class ControlSession {
       _blockPollTimer?.cancel();
       _blockPollTimer = null;
     }
+    if (next is SessionActive) _retryReleases();
     _state.set(next);
     if (_helloSent) _sendState(next);
   }
@@ -404,6 +424,19 @@ final class ControlSession {
   void _pollBlock() {
     final blocked = _blocked;
     if (_stopped || blocked == null) return;
+    _retryReleases();
+    if (_surface is WindowSurface && _geometryOf(_surface) == null) {
+      _stop(StopReason.surfaceGone);
+      return;
+    }
+    if (blocked == BlockReason.localInputUnmonitored) {
+      if (_platform.localActivity?.isMonitoring ?? true) _clearBlocked();
+      return;
+    }
+    if (blocked == BlockReason.hostAppInFront) {
+      if (!_platform.surfaces.isOwnAppInFront()) _clearBlocked();
+      return;
+    }
     if (blocked == BlockReason.windowNotInFront) {
       if (_hasKeyboardFocus()) _clearBlocked();
       return;
@@ -439,7 +472,6 @@ final class ControlSession {
   void _onBytes(Uint8List bytes, {required bool fromReliable}) {
     if (_stopped) return;
     _received++;
-    _touchHeartbeat();
     if (bytes.length > limits.maxMessageBytes) {
       _violation(ViolationKind.oversized);
       return;
@@ -454,6 +486,7 @@ final class ControlSession {
           _violation(ViolationKind.wrongSession);
           return;
         }
+        _touchHeartbeat();
         _onMessage(message, fromReliable: fromReliable);
     }
   }
@@ -471,7 +504,11 @@ final class ControlSession {
       case Bye():
         _stop(StopReason.viewerLeft);
       case Ping m:
-        _send(Pong(id: m.id, viewerMicros: m.viewerMicros));
+        if (_pingBucket.tryTake()) {
+          _send(Pong(id: m.id, viewerMicros: m.viewerMicros));
+        } else {
+          _ignored++;
+        }
       case InputMessage m:
         _onReliableInput(m);
     }
@@ -675,6 +712,7 @@ final class ControlSession {
     final point = _pointFor(m);
     if (point == null) return;
     if (!_onSurface(point)) return _drop(DropReason.occluded);
+    if (_isHostWindow(point)) return _drop(DropReason.hostWindow);
     if (!_secureAllows(InputKind.pointer, point)) {
       return _drop(DropReason.inactive);
     }
@@ -705,18 +743,24 @@ final class ControlSession {
     if (m.surfaceEpoch != _epoch) return _drop(DropReason.staleEpoch);
     final held = _heldButtons.contains(m.button);
     if (m.down == held) return _drop(DropReason.notHeld);
-    final point = _pointFor(m);
+    var point = _pointFor(m);
     if (point == null) return;
     if (m.down) {
       if (!_onSurface(point)) return _drop(DropReason.occluded);
+      if (_isHostWindow(point)) return _drop(DropReason.hostWindow);
       if (!_secureAllows(InputKind.pointer, point)) {
         return _drop(DropReason.inactive);
       }
+    } else if (!_onSurface(point) || _isHostWindow(point)) {
+      // A release always goes through, but where the pointer already is, so
+      // it can't drop onto a window it may not reach.
+      point = _lastPointerPoint ?? point;
     }
+    final target = point;
     final r = _inject(
       InputKind.pointer,
       () => _platform.injector.pointerButton(
-        point,
+        target,
         m.button,
         down: m.down,
         clickCount: max(1, m.clickCount),
@@ -726,8 +770,9 @@ final class ControlSession {
       if (r == InjectResult.injected) _heldButtons.add(m.button);
     } else {
       _heldButtons.remove(m.button);
+      if (r != InjectResult.injected) _unreleasedButtons.add(m.button);
     }
-    if (r == InjectResult.injected) _lastPointerPoint = point;
+    if (r == InjectResult.injected) _lastPointerPoint = target;
     _touchHeartbeat();
   }
 
@@ -737,6 +782,7 @@ final class ControlSession {
     final point = _pointFor(m);
     if (point == null) return;
     if (!_onSurface(point)) return _drop(DropReason.occluded);
+    if (_isHostWindow(point)) return _drop(DropReason.hostWindow);
     if (!_secureAllows(InputKind.pointer, point)) {
       return _drop(DropReason.inactive);
     }
@@ -778,21 +824,11 @@ final class ControlSession {
     if (m.action == KeyAction.repeat && !held) {
       return _drop(DropReason.notHeld);
     }
-    if (!repeat) {
-      if (_heldKeys.length >= limits.maxHeldKeys) {
-        return _drop(DropReason.tooManyKeys);
-      }
-      final filter = options.keyFilter;
-      if (filter != null) {
-        final press = KeyPress(
-          usage: usage,
-          heldModifiers: Set.unmodifiable(
-            _heldKeys.where(HidModifier.isModifier),
-          ),
-        );
-        if (!filter(press)) return _drop(DropReason.filtered);
-      }
+    if (!repeat && _heldKeys.length >= limits.maxHeldKeys) {
+      return _drop(DropReason.tooManyKeys);
     }
+    // Every press is filtered, repeats too: hotkeys fire on autorepeat.
+    if (!_filterAllows(usage, _heldKeys)) return _drop(DropReason.filtered);
     if (!_keyboardAllowed()) return;
     final r = _inject(
       InputKind.keyboard,
@@ -800,19 +836,62 @@ final class ControlSession {
     );
     if (r == InjectResult.injected) {
       _heldKeys.add(usage);
+      _unreleasedKeys.remove(usage);
       _touchHeartbeat();
+      if (HidModifier.isModifier(usage) && options.keyFilter != null) {
+        // A new modifier makes a new combination with the keys already
+        // held: release any the filter rejects now, so their repeats can't
+        // complete it (press R, then Win: no Win+R).
+        for (final k in _heldKeys.toList()) {
+          if (!HidModifier.isModifier(k) && !_filterAllows(k, _heldKeys)) {
+            _drop(DropReason.filtered);
+            _releaseKey(k);
+          }
+        }
+      }
     }
   }
 
+  bool _filterAllows(int usage, Set<int> held) {
+    final filter = options.keyFilter;
+    if (filter == null) return true;
+    return filter(
+      KeyPress(
+        usage: usage,
+        heldModifiers: Set.unmodifiable(
+          held.where((k) => k != usage && HidModifier.isModifier(k)),
+        ),
+      ),
+    );
+  }
+
   void _dispatchText(String text) {
+    var typed = text;
+    const command = KeyModifiers.control | KeyModifiers.alt | KeyModifiers.meta;
+    if (_heldKeys.any((k) => HidModifier.bitOf(k) & command != 0)) {
+      // A platform may type Tab and line breaks as key presses, which would
+      // combine with held modifiers (Alt+Tab): text never acts like keys.
+      typed = typed.replaceAll(RegExp('[\t\r\n]'), '');
+      if (typed.isEmpty) return _drop(DropReason.filtered);
+    }
     if (!_keyboardAllowed()) return;
-    _inject(InputKind.keyboard, () => _platform.injector.text(text));
+    _inject(InputKind.keyboard, () => _platform.injector.text(typed));
   }
 
   /// Whether keys and text may be injected now: the shared window is in
   /// front and no secure context blocks them. Updates the blocked state and
   /// counts the drop when they may not.
   bool _keyboardAllowed() {
+    if (_surface is WindowSurface && _geometryOf(_surface) == null) {
+      _stop(StopReason.surfaceGone);
+      return false;
+    }
+    if (options.protectHostWindows && _platform.surfaces.isOwnAppInFront()) {
+      _drop(DropReason.hostWindow);
+      _setBlocked(BlockReason.hostAppInFront, InputKind.keyboard);
+      return false;
+    }
+    if (_blocked == BlockReason.hostAppInFront) _clearBlocked();
     if (!_hasKeyboardFocus()) {
       _drop(DropReason.notFocused);
       _setBlocked(BlockReason.windowNotInFront, InputKind.keyboard);
@@ -830,6 +909,12 @@ final class ControlSession {
   /// checked immediately before every OS call (`docs/design.md` §6.2).
   InjectResult? _inject(InputKind kind, InjectResult Function() call) {
     if (_stopped) return null;
+    final expiresAt = options.expiresAt;
+    if (expiresAt != null && !clock.now().isBefore(expiresAt)) {
+      // The timer may fire late after the machine sleeps.
+      _stop(StopReason.expired);
+      return null;
+    }
     final r = call();
     switch (r) {
       case InjectResult.injected:
@@ -870,9 +955,32 @@ final class ControlSession {
       return null;
     }
     if (_blocked == BlockReason.surfaceHidden) _clearBlocked();
-    final bounds = _surface.contentInsets.deflateRect(g.bounds);
-    return mapNormalizedPoint(m.x, m.y, bounds);
+    final outer = g.bounds;
+    final bounds = _surface.contentInsets.deflateRect(outer);
+    if (!_isUsable(outer) || !_isUsable(bounds)) {
+      _drop(DropReason.failed);
+      return null;
+    }
+    final p = mapNormalizedPoint(m.x, m.y, bounds);
+    // Never outside the surface, whatever the insets.
+    return Offset(
+      p.dx.clamp(outer.left, outer.right),
+      p.dy.clamp(outer.top, outer.bottom),
+    );
   }
+
+  static bool _isUsable(Rect r) =>
+      r.left.isFinite &&
+      r.top.isFinite &&
+      r.width.isFinite &&
+      r.height.isFinite &&
+      r.width > 0 &&
+      r.height > 0;
+
+  /// Whether [point] is over the host app's own windows, which a viewer
+  /// must never operate (`HostOptions.protectHostWindows`).
+  bool _isHostWindow(Offset point) =>
+      options.protectHostWindows && _platform.surfaces.isOwnWindowAt(point);
 
   bool _onSurface(Offset point) => switch (_surface) {
     WindowSurface s => _platform.surfaces.isOnSurface(s, point),
@@ -887,6 +995,12 @@ final class ControlSession {
   /// Probes for a secure context, updating the blocked state. Returns
   /// whether [kind] input may be injected.
   bool _secureAllows(InputKind kind, Offset? point) {
+    final monitor = _platform.localActivity;
+    if (monitor != null && !monitor.isMonitoring) {
+      // No injection without local-input detection (docs/design.md §6.3).
+      _setBlocked(BlockReason.localInputUnmonitored, kind);
+      return false;
+    }
     final reason = _platform.secureContext?.check(kind, point: point);
     if (reason != null) {
       _setBlocked(reason, kind);
@@ -913,33 +1027,60 @@ final class ControlSession {
 
   void _releaseKey(int usage) {
     _heldKeys.remove(usage);
-    _guarded(() => _platform.injector.key(usage, down: false));
+    if (!_guarded(() => _platform.injector.key(usage, down: false))) {
+      _unreleasedKeys.add(usage);
+    }
   }
 
   void _releaseButtons() {
-    final point = _lastPointerPoint;
     for (final button in _heldButtons.toList()) {
       _heldButtons.remove(button);
-      if (point != null) {
-        _guarded(
-          () => _platform.injector.pointerButton(
-            point,
-            button,
-            down: false,
-            clickCount: 1,
-          ),
-        );
+      if (!_releaseButton(button)) _unreleasedButtons.add(button);
+    }
+  }
+
+  bool _releaseButton(PointerButton button) {
+    final point = _lastPointerPoint;
+    if (point == null) return true; // Never pressed anywhere.
+    return _guarded(
+      () => _platform.injector.pointerButton(
+        point,
+        button,
+        down: false,
+        clickCount: 1,
+      ),
+    );
+  }
+
+  /// Retries releases the OS refused earlier, so nothing stays stuck once
+  /// the condition (a secure desktop, a stale permission) clears.
+  void _retryReleases() {
+    for (final usage in _unreleasedKeys.toList()) {
+      if (_heldKeys.contains(usage)) {
+        _unreleasedKeys.remove(usage);
+      } else if (_guarded(() => _platform.injector.key(usage, down: false))) {
+        _unreleasedKeys.remove(usage);
+      }
+    }
+    for (final button in _unreleasedButtons.toList()) {
+      if (_heldButtons.contains(button) || _releaseButton(button)) {
+        _unreleasedButtons.remove(button);
       }
     }
   }
 
   /// Calls [release], counting it, and never lets a failure stop the other
-  /// releases.
-  void _guarded(InjectResult Function() release) {
+  /// releases. Returns whether the OS took it.
+  bool _guarded(InjectResult Function() release) {
     try {
-      if (release() == InjectResult.injected) _injected++;
+      if (release() == InjectResult.injected) {
+        _injected++;
+        return true;
+      }
+      return false;
     } catch (_) {
       _drop(DropReason.failed);
+      return false;
     }
   }
 
@@ -947,8 +1088,13 @@ final class ControlSession {
 
   void _send(WireMessage message) {
     final channel = _link.reliable;
-    if (!channel.isOpen) return;
-    channel.send(encodeMessage(message, sessionTag: _tag));
+    try {
+      if (!channel.isOpen) return;
+      channel.send(encodeMessage(message, sessionTag: _tag));
+    } catch (_) {
+      // A transport closing under us: the session's state doesn't depend on
+      // what reaches the viewer.
+    }
   }
 }
 

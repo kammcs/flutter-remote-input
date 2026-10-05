@@ -305,7 +305,7 @@ final class RemoteInputViewer {
   void key(int usage, KeyAction action, {int modifiers = KeyModifiers.none}) {
     if (!_canSend()) return;
     if (usage < 0 || usage > 0xFFFFFFFF) {
-      throw RangeError.range(usage, 0, 0xFFFFFFFF, 'usage');
+      throw RangeError('usage is out of range 0..0xFFFFFFFF');
     }
     _sendInput(
       (seq) => KeyMessage(
