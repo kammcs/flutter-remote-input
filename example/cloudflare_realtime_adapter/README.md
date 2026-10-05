@@ -12,7 +12,7 @@ It is a **reference to copy into an app**, not a published package. It is kept a
 
 ## Use
 
-Order matters. The host sends its handshake once, when its link opens, and the SFU forwards a message only to channels that are already subscribed. So the viewer must be listening before the presenter attaches:
+Order still helps. The SFU forwards a message only to channels that are already subscribed; the host re-sends its handshake every second until the viewer answers, so a late viewer still connects, but attaching the viewer first avoids the wait:
 
 ```dart
 // Presenter, early (for example when it starts sharing its screen):

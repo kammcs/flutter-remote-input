@@ -260,10 +260,9 @@ class _HostPageState extends State<HostPage> {
               Text(
                 canNeverHost
                     ? HostLimitation.unsupportedPlatform.description
-                    : 'remote_input injects input on Windows and macOS. The '
-                          'injector for this OS is not in this version of '
-                          'the package yet (roadmap M2 for Windows, M3 for '
-                          'macOS). Until then, the one-machine demo shows '
+                    : 'remote_input injects input on Windows and macOS, '
+                          'through its native plugin, which this build '
+                          "doesn't have loaded. The one-machine demo shows "
                           'the whole path with a drawn desktop.',
               ),
               const SizedBox(height: 16),

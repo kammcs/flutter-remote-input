@@ -32,7 +32,8 @@ void main() {
 
   testWidgets('without an injector, the host screen explains and offers '
       'the demo', (tester) async {
-    expect(RemoteInputHost.isSupported, isFalse); // Until M2 and M3.
+    // No native plugin is loaded under `flutter test`.
+    expect(RemoteInputHost.isSupported, isFalse);
     await tester.pumpWidget(const MaterialApp(home: HostPage()));
     expect(find.text('Open the one-machine demo'), findsOneWidget);
     expect(find.text("Can't be controlled on this device"), findsOneWidget);

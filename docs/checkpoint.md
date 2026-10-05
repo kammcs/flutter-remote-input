@@ -108,6 +108,8 @@ A short pass (A1 steps 2, 3, 7 and A2 step 1) for each viewer against each host:
 - Any mouse: hold a button, pause from the host, resume while still holding: nothing is pressed or dragged until you let go.
 - Touch, direct mode: a second finger landing during a one-finger drag doesn't move it.
 
+**Example app (M7 review):** on a phone in landscape with the soft keyboard up, the viewer shows its compact strip and a usable picture, and the capture keeps focus when the keyboard opens. **Send keys → Type text…** with several lines arrives with real line breaks. Five wrong pairing codes from one device give "Too many wrong codes … Try again in 30 seconds", while another device can still pair with the right code.
+
 ### B2. Coordinates on mixed-DPI, multi-monitor hosts
 
 For **each display** of the host, pick it in **Shared display**, pair, and:

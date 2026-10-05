@@ -43,9 +43,10 @@ The runbook for the two-machine checks (Windows ↔ macOS, web and phone viewers
 
 ## Status
 
-- **Hosting needs the injectors.** Until the Windows (M2) and macOS (M3) injectors are in the package, `RemoteInputHost.isSupported` is false, and **Host this computer** explains that and offers the demo.
-- **Capture is a stand-in.** [`lib/viewer/capture_view.dart`](lib/viewer/capture_view.dart) is a minimal stand-in for `RemoteInputCapture` (M4): mouse, desktop trackpad scrolling, one-finger direct touch and hardware keys. Trackpad touch mode, pinch-zoom, IMEs and the soft keyboard arrive with the widget. Until then, **Send keys → Type text…** types on phones.
-- **macOS permission onboarding** ([`lib/host/permission_onboarding.dart`](lib/host/permission_onboarding.dart)) detects a missing Accessibility permission through `RemoteInputHost.checkAvailable()`; its buttons need `RemoteInputPermissions` (M3).
+- **Hosting** works on Windows and macOS with the package's injectors. They are built and unit-tested but not yet checked on devices ([docs/checkpoint.md](../docs/checkpoint.md) Part C); on other platforms **Host this computer** explains why and offers the demo.
+- **Capture** is the package's `RemoteInputCapture` and `RemoteKeyBar` ([`lib/viewer/capture_view.dart`](lib/viewer/capture_view.dart)): mouse, trackpad, touch in trackpad and direct modes with pinch zoom, IMEs and the soft keyboard. On a phone in landscape or with the keyboard up, the viewer folds its controls into a compact strip so the picture keeps most of the screen. **Send keys → Type text…** sends line breaks as Enter and says when text was cut at 16 KB.
+- **macOS permission onboarding** ([`lib/host/permission_onboarding.dart`](lib/host/permission_onboarding.dart)) uses `RemoteInputPermissions`: asks macOS, opens System Settings, and notices the grant.
+- **The host app's own window is protected** (`HostOptions.protectHostWindows`): the viewer can't click or type in it, so its Stop button stays with the person at the host.
 
 ## Layout
 
