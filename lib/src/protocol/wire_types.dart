@@ -236,6 +236,10 @@ enum StopReason {
   /// The host said goodbye without a reason (viewer side only).
   hostLeft(12),
 
+  /// Nothing arrived from the host for `ViewerOptions.hostTimeout` (viewer
+  /// side only): it crashed, slept, or lost its network.
+  timedOut(13),
+
   /// A reason this version doesn't know, from a newer host.
   other(255);
 
@@ -267,6 +271,11 @@ abstract final class KeyModifiers {
   /// Meta: Command on Apple keyboards, the Windows key elsewhere (either
   /// side).
   static const int meta = 1 << 3;
+
+  /// Not a modifier but a flag: the host applies no modifier mapping
+  /// (`ModifierMapping`) to this key, so a Mac viewer can send the Windows
+  /// key itself. Hosts that don't know it ignore it.
+  static const int unmapped = 1 << 15;
 }
 
 /// Capability bits in the handshake (`HostHello.capabilities`,

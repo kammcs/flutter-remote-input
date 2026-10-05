@@ -25,6 +25,9 @@ import 'platform.dart';
 const int _maxViolations = 50;
 const Duration _violationWindow = Duration(seconds: 10);
 
+/// How often `HostHello` is re-sent until the viewer answers.
+const Duration _helloInterval = Duration(seconds: 1);
+
 /// How often a blocked session checks whether the condition cleared.
 const Duration _blockPollInterval = Duration(milliseconds: 250);
 
@@ -120,6 +123,7 @@ final class ControlSession {
   Timer? _heartbeatTimer;
   Timer? _resumeTimer;
   Timer? _blockPollTimer;
+  Timer? _helloTimer;
 
   int _received = 0;
   int _injected = 0;
@@ -253,7 +257,18 @@ final class ControlSession {
     if (_stopped) return;
     if (open) {
       _wasOpen = true;
-      if (!_helloSent) _sendHostHello();
+      if (!_helloSent) {
+        _sendHostHello();
+        // Re-sent until the viewer answers: over an SFU, the viewer may
+        // subscribe after the host's channel opens.
+        _helloTimer = Timer.periodic(_helloInterval, (_) {
+          if (_handshakeDone || _stopped) {
+            _helloTimer?.cancel();
+          } else {
+            _sendHostHello();
+          }
+        });
+      }
     } else if (_wasOpen) {
       _stop(StopReason.linkClosed);
     }
@@ -289,6 +304,7 @@ final class ControlSession {
       _heartbeatTimer,
       _resumeTimer,
       _blockPollTimer,
+      _helloTimer,
       _drainTimer,
       _moveTimer,
     ]) {
@@ -478,6 +494,7 @@ final class ControlSession {
         m.viewerPlatform != PeerPlatform.unknown &&
         m.viewerPlatform.isApple != _platform.platform.isApple;
     _handshakeDone = true;
+    _helloTimer?.cancel();
     _update();
   }
 
@@ -740,7 +757,7 @@ final class ControlSession {
   void _dispatchKey(KeyMessage m) {
     var usage = m.usage;
     var modifiers = m.modifiers;
-    if (_swapModifiers) {
+    if (_swapModifiers && modifiers & KeyModifiers.unmapped == 0) {
       usage = swapControlMetaUsage(usage);
       modifiers = swapControlMetaBits(modifiers);
     }

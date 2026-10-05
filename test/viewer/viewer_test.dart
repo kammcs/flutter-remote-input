@@ -374,6 +374,72 @@ void main() {
     });
   });
 
+  test('a viewer that subscribes late still handshakes', () {
+    fakeAsync((async) {
+      final links = MemoryInputLink.pair();
+      final platform = FakeHostPlatform(platform: PeerPlatform.macos);
+      final session = RemoteInputHost(platform: platform)
+          .enable(link: links.host, surface: const SharedSurface.display(1));
+      async.flushMicrotasks(); // the first HostHello goes nowhere
+      final viewer = RemoteInputViewer(link: links.viewer);
+      async.elapse(const Duration(milliseconds: 1100));
+      expect(viewer.state, const SessionActive());
+      expect(session.state, const SessionActive());
+      expect(viewer.hostPlatform, PeerPlatform.macos);
+    });
+  });
+
+  test('gives up on a host that goes quiet', () {
+    fakeAsync((async) {
+      final links = MemoryInputLink.pair();
+      final viewer = RemoteInputViewer(link: links.viewer);
+      final nonce = Uint8List(16)..[0] = 9;
+      links.host.reliable.send(
+        encodeMessage(
+          HostHello(
+            minVersion: 1,
+            maxVersion: 1,
+            nonce: nonce,
+            hostPlatform: PeerPlatform.windows,
+            capabilities: 0,
+            surfaceEpoch: 0,
+            surfaceWidth: 100,
+            surfaceHeight: 100,
+          ),
+          sessionTag: sessionTagOf(nonce),
+        ),
+      );
+      async.elapse(const Duration(seconds: 9));
+      expect(viewer.state, const SessionWaiting());
+      async.elapse(const Duration(seconds: 3));
+      expect(viewer.state, const SessionStopped(StopReason.timedOut));
+    });
+  });
+
+  test('keeps round-trip percentiles', () {
+    fakeAsync((async) {
+      final p = Pair(async);
+      p.settle(const Duration(seconds: 5));
+      expect(p.viewer.stats.roundTripP50, Duration.zero);
+      expect(p.viewer.stats.roundTripP95, Duration.zero);
+    });
+  });
+
+  test('a shortcut can skip the Command/Control mapping', () {
+    fakeAsync((async) {
+      final p = Pair(
+        async,
+        viewerOptions: const ViewerOptions(platform: PeerPlatform.macos),
+      );
+      p.viewer.sendShortcut([HidModifier.metaLeft], mapModifiers: false);
+      p.settle();
+      expect(p.events, [
+        const InjectedKey(HidModifier.metaLeft, down: true),
+        const InjectedKey(HidModifier.metaLeft, down: false),
+      ]);
+    });
+  });
+
   test('splitUtf8 never splits a code point', () {
     final text = 'a€😀' * 300;
     final parts = splitUtf8(text, 1024);

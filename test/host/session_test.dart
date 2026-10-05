@@ -89,6 +89,19 @@ void main() {
       });
     });
 
+    test('re-sends HostHello until the viewer answers', () {
+      fakeAsync((async) {
+        final rig = Rig(async, handshake: false);
+        rig.elapse(const Duration(milliseconds: 3100));
+        expect(rig.viewer.received.whereType<HostHello>(), hasLength(4));
+        rig.viewer.hello();
+        rig.flush();
+        rig.elapse(const Duration(seconds: 3));
+        expect(rig.viewer.received.whereType<HostHello>(), hasLength(4));
+        expect(rig.session.state, const SessionActive());
+      });
+    });
+
     test('injects nothing before the viewer completes the handshake', () {
       fakeAsync((async) {
         final rig = Rig(async, handshake: false);

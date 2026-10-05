@@ -1,11 +1,13 @@
 import 'dart:async';
+import 'dart:collection';
+import 'dart:math';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui' show Offset, Size;
 
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, kIsWeb;
+    show TargetPlatform, defaultTargetPlatform, kIsWeb, listEquals;
 
 import '../keys.dart';
 import '../link.dart';
@@ -24,6 +26,7 @@ final class ViewerOptions {
     this.moveInterval = const Duration(milliseconds: 8),
     this.maxBufferedMoveBytes = 16 * 1024,
     this.pingInterval = const Duration(seconds: 1),
+    this.hostTimeout = const Duration(seconds: 10),
   });
 
   /// The OS to report in the handshake, which decides the host's shortcut
@@ -44,6 +47,12 @@ final class ViewerOptions {
   /// How often to ping the host while a session is up: round-trip times,
   /// and a heartbeat so the host knows held keys aren't stuck.
   final Duration pingInterval;
+
+  /// How long without any message from the host (pings are answered, so a
+  /// live host is never quiet this long) before the viewer gives up on the
+  /// session with [StopReason.timedOut]. It keeps listening, so a host that
+  /// comes back with a new session is picked up.
+  final Duration hostTimeout;
 }
 
 /// The surface the host shares, as it announced it.
@@ -68,6 +77,8 @@ final class ViewerStats {
     required this.movesSkippedForBackpressure,
     required this.droppedWhileInactive,
     required this.roundTripTime,
+    this.roundTripP50,
+    this.roundTripP95,
   });
 
   /// Messages sent to the host.
@@ -85,6 +96,12 @@ final class ViewerStats {
 
   /// The latest round-trip time to the host, if measured.
   final Duration? roundTripTime;
+
+  /// The median round-trip time over the last minute of pings.
+  final Duration? roundTripP50;
+
+  /// The 95th-percentile round-trip time over the last minute of pings.
+  final Duration? roundTripP95;
 }
 
 /// The viewer's side: sends a person's pointer and keyboard input to the
@@ -142,6 +159,10 @@ final class RemoteInputViewer {
   Timer? _pingTimer;
   int _pingId = 0;
   Duration? _rtt;
+  final ListQueue<int> _rttSamples = ListQueue();
+  Uint8List? _lastNonce;
+  PeerPlatform? _hostPlatform;
+  int _lastHeardMicros = 0;
 
   int _sent = 0;
   int _coalesced = 0;
@@ -173,7 +194,20 @@ final class RemoteInputViewer {
     movesSkippedForBackpressure: _backpressure,
     droppedWhileInactive: _droppedInactive,
     roundTripTime: _rtt,
+    roundTripP50: _rttPercentile(0.50),
+    roundTripP95: _rttPercentile(0.95),
   );
+
+  /// The host's OS, from its latest handshake: for labels like "Cmd" or
+  /// "Win", and "Controlling a Mac".
+  PeerPlatform? get hostPlatform => _hostPlatform;
+
+  Duration? _rttPercentile(double p) {
+    if (_rttSamples.isEmpty) return null;
+    final sorted = _rttSamples.toList()..sort();
+    final i = ((sorted.length - 1) * p).round();
+    return Duration(microseconds: sorted[i]);
+  }
 
   /// The buttons this viewer holds down on the host.
   Set<PointerButton> get heldButtons => Set.unmodifiable(_heldButtons);
@@ -292,9 +326,10 @@ final class RemoteInputViewer {
   /// Presses [usages] in order, then releases them in reverse: a shortcut
   /// the viewer's own OS would take first (Alt+Tab, Command+Space), for a
   /// "Send keys" menu. Modifier state is derived from the modifier keys in
-  /// [usages].
-  void sendShortcut(List<int> usages) {
-    var modifiers = KeyModifiers.none;
+  /// [usages]. With [mapModifiers] false, the host applies no Command/Control
+  /// mapping, so a Mac viewer can send the Windows key itself.
+  void sendShortcut(List<int> usages, {bool mapModifiers = true}) {
+    var modifiers = mapModifiers ? KeyModifiers.none : KeyModifiers.unmapped;
     for (final u in usages) {
       modifiers |= HidModifier.bitOf(u);
       key(u, KeyAction.down, modifiers: modifiers);
@@ -421,6 +456,7 @@ final class RemoteInputViewer {
       return;
     }
     if (result.sessionTag != _tag) return;
+    _lastHeardMicros = clock.now().microsecondsSinceEpoch;
     switch (message) {
       case HostState m:
         _onHostState(m);
@@ -434,7 +470,16 @@ final class RemoteInputViewer {
       case Pong m:
         final now = clock.now().microsecondsSinceEpoch;
         if (m.viewerMicros <= now) {
-          _rtt = Duration(microseconds: now - m.viewerMicros);
+          final micros = now - m.viewerMicros;
+          _rtt = Duration(microseconds: micros);
+          _rttSamples.add(micros);
+          final keep = max(
+            1,
+            60000000 ~/ max(1, options.pingInterval.inMicroseconds),
+          );
+          while (_rttSamples.length > keep) {
+            _rttSamples.removeFirst();
+          }
         }
       case Bye(:final reason):
         _resetSession();
@@ -451,7 +496,13 @@ final class RemoteInputViewer {
   }
 
   void _onHostHello(HostHello m) {
+    // The host re-sends HostHello until it hears Hello; one per session.
+    final last = _lastNonce;
+    if (last != null && listEquals(last, m.nonce)) return;
+    _lastNonce = m.nonce;
     _resetSession();
+    _hostPlatform = m.hostPlatform;
+    _lastHeardMicros = clock.now().microsecondsSinceEpoch;
     _tag = sessionTagOf(m.nonce);
     _surface.set(
       RemoteSurface(
@@ -506,6 +557,12 @@ final class RemoteInputViewer {
   }
 
   void _ping() {
+    final quiet = clock.now().microsecondsSinceEpoch - _lastHeardMicros;
+    if (quiet > options.hostTimeout.inMicroseconds) {
+      _resetSession();
+      _state.set(const SessionStopped(StopReason.timedOut));
+      return;
+    }
     _sendControl(
       Ping(id: _pingId, viewerMicros: clock.now().microsecondsSinceEpoch),
     );

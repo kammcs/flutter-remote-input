@@ -64,6 +64,7 @@ String _stopped(StopReason reason, bool host) => switch (reason) {
   StopReason.unsupportedVersion =>
     'The two apps speak different protocol versions',
   StopReason.hostLeft => 'The host left',
+  StopReason.timedOut => 'Lost contact with the host',
   StopReason.other => 'Control stopped',
 };
 
