@@ -22,8 +22,9 @@ void main() {
       ..screen = (left: -1920, top: 0, right: 1920, bottom: 1080)
       ..foreground = _hwnd
       ..hitTest = ((_, _) => _hwnd);
+    // Another app's window: the host app's own windows aren't controllable.
     api.windows[_hwnd] = FakeWindow(
-      pid: api.currentProcessId,
+      pid: 4242,
       bounds: (left: -500, top: 100, right: 300, bottom: 700),
     );
     native = FakeNativeActivity();

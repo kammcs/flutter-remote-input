@@ -95,6 +95,24 @@ abstract interface class Win32Api {
   /// (`GetWindowThreadProcessId`), or 0.
   int processIdOfWindow(int hwnd);
 
+  /// The id of the thread that created [hwnd] (`GetWindowThreadProcessId`'s
+  /// return value), or 0.
+  int threadIdOfWindow(int hwnd);
+
+  /// `GetWindow(hwnd, GW_OWNER)`: the window that owns top-level window
+  /// [hwnd], or 0.
+  int ownerWindow(int hwnd);
+
+  /// `GetWindowLongPtrW(hwnd, GWL_STYLE)`, as an unsigned 32-bit value.
+  int windowStyle(int hwnd);
+
+  /// `GetWindowLongPtrW(hwnd, GWL_EXSTYLE)`, as an unsigned 32-bit value.
+  int windowExStyle(int hwnd);
+
+  /// `GetClassNameW`: the window's class name, such as `#32768` for a
+  /// menu, or `''` if it can't be read.
+  String windowClassName(int hwnd);
+
   /// `GetCurrentProcessId`.
   int get currentProcessId;
 
@@ -115,7 +133,8 @@ abstract interface class Win32Api {
 /// The native side of the local-activity monitor: the plugin DLL's
 /// low-level hooks and their counter (`windows/remote_input_native.cpp`).
 abstract interface class NativeActivity {
-  /// Starts the hook thread, if it isn't running. Whether the hooks are in.
+  /// Starts the hook thread, if it isn't running (or has exited). Whether
+  /// the hooks are in.
   bool start();
 
   /// Stops the hook thread.
@@ -123,6 +142,31 @@ abstract interface class NativeActivity {
 
   /// Local input events seen so far: a counter that only grows.
   int count();
+
+  /// Whether the hook thread runs with both hooks installed by its last
+  /// (re)install. Windows removes hooks silently, so read
+  /// [heartbeatAgeMs] too.
+  bool hooksInstalled();
+
+  /// Milliseconds since the hook thread's message loop last ran its
+  /// heartbeat (every 100 ms), or -1 if the thread isn't running.
+  int heartbeatAgeMs();
+}
+
+/// Window styles (winuser.h) the surface resolver reads.
+abstract final class WindowStyle {
+  /// `WS_POPUP`.
+  static const int popup = 0x80000000;
+
+  /// `WS_EX_TOOLWINDOW`: no taskbar button.
+  static const int exToolWindow = 0x00000080;
+
+  /// `WS_EX_APPWINDOW`: a taskbar button, even when owned.
+  static const int exAppWindow = 0x00040000;
+
+  /// The class name of menus (`TrackPopupMenu`, menu bars' drop-downs and
+  /// context menus).
+  static const String menuClass = '#32768';
 }
 
 /// Integrity levels: the last sub-authority of a token's mandatory label

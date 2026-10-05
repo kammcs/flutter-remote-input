@@ -16,6 +16,9 @@ final class FakeWin32Api implements Win32Api {
   /// The raw bytes of each call.
   final List<Uint8List> rawCalls = [];
 
+  /// The buffers passed to each call, as passed (not copied).
+  final List<Uint8List> passedBuffers = [];
+
   /// What `SendInput` returns: by default, everything inserted.
   SendInputResult Function(int count)? onSend;
 
@@ -56,6 +59,7 @@ final class FakeWin32Api implements Win32Api {
 
   @override
   SendInputResult sendInput(Uint8List inputs) {
+    passedBuffers.add(inputs);
     rawCalls.add(Uint8List.fromList(inputs));
     calls.add(decodeInputRecords(inputs));
     final count = inputs.length ~/ inputRecordSize;
@@ -122,6 +126,21 @@ final class FakeWin32Api implements Win32Api {
   int processIdOfWindow(int hwnd) => windows[hwnd]?.pid ?? 0;
 
   @override
+  int threadIdOfWindow(int hwnd) => windows[hwnd]?.threadId ?? 0;
+
+  @override
+  int ownerWindow(int hwnd) => windows[hwnd]?.owner ?? 0;
+
+  @override
+  int windowStyle(int hwnd) => windows[hwnd]?.style ?? 0;
+
+  @override
+  int windowExStyle(int hwnd) => windows[hwnd]?.exStyle ?? 0;
+
+  @override
+  String windowClassName(int hwnd) => windows[hwnd]?.className ?? '';
+
+  @override
   bool isInputDesktopDefault() => inputDesktopDefault;
 
   @override
@@ -139,7 +158,12 @@ final class FakeWindow {
     this.iconic = false,
     this.visible = true,
     this.cloaked = false,
-  });
+    int? thread,
+    this.owner = 0,
+    this.style = 0,
+    this.exStyle = 0,
+    this.className = 'Window',
+  }) : threadId = thread ?? pid * 10;
 
   int pid;
   WinRect? bounds;
@@ -147,6 +171,15 @@ final class FakeWindow {
   bool iconic;
   bool visible;
   bool cloaked;
+
+  /// The creating thread: by default one per process.
+  int threadId;
+
+  /// `GW_OWNER`; 0 for none.
+  int owner;
+  int style;
+  int exStyle;
+  String className;
 }
 
 final class FakeNativeActivity implements NativeActivity {
@@ -155,6 +188,18 @@ final class FakeNativeActivity implements NativeActivity {
   bool failStart = false;
   int starts = 0;
   int stops = 0;
+
+  /// Set to simulate the hooks failing to re-install.
+  bool hooksLost = false;
+
+  /// The heartbeat's age while running, in milliseconds.
+  int heartbeatAge = 30;
+
+  @override
+  bool hooksInstalled() => running && !hooksLost;
+
+  @override
+  int heartbeatAgeMs() => running ? heartbeatAge : -1;
 
   @override
   bool start() {

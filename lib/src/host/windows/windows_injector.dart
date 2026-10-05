@@ -184,7 +184,11 @@ final class WindowsInjector implements InputInjector {
   // --- Sending --------------------------------------------------------------
 
   InjectResult _send(List<InputRecord> records) {
-    final r = _api.sendInput(encodeInputRecords(records));
+    final bytes = encodeInputRecords(records);
+    final r = _api.sendInput(bytes);
+    // Typed text and key codes don't outlive the call in this buffer
+    // (`docs/design.md` §6.6); the FFI side clears its native copy too.
+    bytes.fillRange(0, bytes.length, 0);
     if (r.sent == records.length) return InjectResult.injected;
     return r.error == Win32Input.errorAccessDenied
         ? InjectResult.elevatedTarget

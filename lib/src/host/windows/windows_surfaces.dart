@@ -18,19 +18,17 @@ import 'win32_api.dart';
 ///   as drawn, without the invisible resize borders), and hidden while
 ///   minimized, invisible or cloaked (on another virtual desktop).
 /// - **Occlusion and focus** (open question 5): a point is on the shared
-///   window when `WindowFromPoint`'s root window is the shared window, or
-///   belongs to the same process: its menus, popups, tooltips and dialogs
-///   count as the shared window, since they're part of the app the viewer
-///   was given. Keys go to it while the foreground window passes the same
-///   test.
+///   window when `WindowFromPoint`'s root window ([isSharedWindow]) is the
+///   shared window, is owned by it (its dialogs, and their popups), or is a
+///   menu, tooltip or popup of the shared window's own thread. Matching is
+///   by window ownership, not process, so sharing one File Explorer window
+///   doesn't admit the taskbar, the desktop or another Explorer window, and
+///   sharing one browser window doesn't admit the browser's other windows.
+///   Keys go to it while the foreground window passes the same test.
+/// - **The host app's own windows** ([isOwnWindowAt], [isOwnAppInFront]):
+///   the root window under the point, or the foreground window, belongs to
+///   this process.
 final class WindowsSurfaceResolver implements SurfaceResolver {
-  // TODO(review H1): own-process checks; stubs until the Windows fix lands.
-  @override
-  bool isOwnWindowAt(Offset point) => false;
-
-  @override
-  bool isOwnAppInFront() => false;
-
   /// Creates a resolver on [api].
   WindowsSurfaceResolver(this._api);
 
@@ -63,20 +61,36 @@ final class WindowsSurfaceResolver implements SurfaceResolver {
           : SurfaceGeometry(bounds: s.bounds, pixelSize: s.pixelSize),
   };
 
+  /// The most owners [isSharedWindow] follows from a window: owner chains
+  /// are short (a dialog of a dialog), and this bounds a malformed one.
+  static const int maxOwnerDepth = 16;
+
   @override
   bool isOnSurface(SharedSurface surface, Offset point) {
     if (surface is! WindowSurface) return true;
-    final hit = _api.windowFromPoint(
-      desktopPixel(point.dx),
-      desktopPixel(point.dy),
-    );
-    return _belongsTo(hit, surface.handle);
+    return isSharedWindow(_windowAt(point), surface.handle);
   }
 
   @override
   bool hasKeyboardFocus(SharedSurface surface) {
     if (surface is! WindowSurface) return true;
-    return _belongsTo(_api.foregroundWindow(), surface.handle);
+    return isSharedWindow(_api.foregroundWindow(), surface.handle);
+  }
+
+  @override
+  bool isOwnWindowAt(Offset point) => _isOwn(_windowAt(point));
+
+  @override
+  bool isOwnAppInFront() => _isOwn(_api.foregroundWindow());
+
+  int _windowAt(Offset point) =>
+      _api.windowFromPoint(desktopPixel(point.dx), desktopPixel(point.dy));
+
+  /// Whether [hwnd]'s root window belongs to this process.
+  bool _isOwn(int hwnd) {
+    if (hwnd == 0) return false;
+    final pid = _api.processIdOfWindow(_topLevel(hwnd));
+    return pid != 0 && pid == _api.currentProcessId;
   }
 
   // --- Displays -------------------------------------------------------------
@@ -128,18 +142,51 @@ final class WindowsSurfaceResolver implements SurfaceResolver {
     );
   }
 
-  /// Whether [hwnd] is the shared window [shared], one of its children, or
-  /// a window of the same process.
-  bool _belongsTo(int hwnd, int shared) {
-    if (hwnd == 0) return false;
+  /// Whether input to window [hwnd] (the window under a point, or the
+  /// foreground window) goes to the shared window [shared]. Its root
+  /// window must be:
+  ///
+  /// 1. the shared window (or, if [shared] is a child, its root window);
+  /// 2. owned by it, directly or through other owned windows
+  ///    (`GW_OWNER`): its dialogs, and their popups and tooltips;
+  /// 3. or, if it has no owner, a menu (class `#32768`), or a `WS_POPUP`
+  ///    tool window without a taskbar button (`WS_EX_TOOLWINDOW` and not
+  ///    `WS_EX_APPWINDOW`), created by the shared window's own thread:
+  ///    menus, tooltips and drop-downs that aren't owned.
+  ///
+  /// Anything else is another window, even of the same process: another
+  /// Explorer window, the taskbar or the desktop when an Explorer window is
+  /// shared, or the browser's other windows. A window owned by some other
+  /// window isn't matched by thread. Ownership can cross processes, so a
+  /// window another process opened for the shared one, owned by it,
+  /// counts.
+  bool isSharedWindow(int hwnd, int shared) {
+    if (hwnd == 0 || shared == 0) return false;
     if (hwnd == shared) return true;
-    final root = _api.rootWindow(hwnd);
-    final sharedRoot = _api.rootWindow(shared);
-    if (root != 0 && root == (sharedRoot == 0 ? shared : sharedRoot)) {
-      return true;
+    final target = _topLevel(shared);
+    final root = _topLevel(hwnd);
+    if (root == target) return true;
+    var owner = _api.ownerWindow(root);
+    if (owner != 0) {
+      for (var i = 0; owner != 0 && i < maxOwnerDepth; i++) {
+        if (owner == target) return true;
+        owner = _api.ownerWindow(owner);
+      }
+      return false;
     }
-    final pid = _api.processIdOfWindow(root == 0 ? hwnd : root);
-    return pid != 0 && pid == _api.processIdOfWindow(shared);
+    final thread = _api.threadIdOfWindow(root);
+    if (thread == 0 || thread != _api.threadIdOfWindow(target)) return false;
+    if (_api.windowClassName(root) == WindowStyle.menuClass) return true;
+    if (_api.windowStyle(root) & WindowStyle.popup == 0) return false;
+    final ex = _api.windowExStyle(root);
+    return ex & WindowStyle.exToolWindow != 0 &&
+        ex & WindowStyle.exAppWindow == 0;
+  }
+
+  /// [hwnd]'s root window (`GA_ROOT`), or [hwnd] where it has none.
+  int _topLevel(int hwnd) {
+    final root = _api.rootWindow(hwnd);
+    return root == 0 ? hwnd : root;
   }
 }
 

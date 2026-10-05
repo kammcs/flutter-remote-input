@@ -185,4 +185,18 @@ void main() {
       }
     });
   });
+
+  test('the records passed to SendInput are cleared after the call', () {
+    injector
+      ..text('hunter2')
+      ..key(0x00070004, down: true)
+      ..movePointer(const Offset(10, 10), heldButtons: {});
+    expect(api.passedBuffers, hasLength(3));
+    for (final b in api.passedBuffers) {
+      expect(b, everyElement(0));
+    }
+    // What Windows was given, copied during the call, was the real thing.
+    expect(api.records.whereType<KeyRecord>(), isNotEmpty);
+    expect(api.rawCalls.first, isNot(everyElement(0)));
+  });
 }

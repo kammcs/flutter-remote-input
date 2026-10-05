@@ -66,4 +66,86 @@ void main() {
       expect(native.starts, 5);
     });
   });
+
+  group('health', () {
+    test('hooks that are lost stop monitoring; recovery emits once', () {
+      fakeAsync((async) {
+        final native = FakeNativeActivity();
+        final monitor = WindowsLocalActivity(native);
+        var events = 0;
+        final sub = monitor.activity.listen((_) => events++);
+        expect(monitor.isMonitoring, isTrue);
+        native.hooksLost = true;
+        async.elapse(const Duration(milliseconds: 10));
+        expect(monitor.isMonitoring, isFalse);
+        expect(events, 0);
+        native.hooksLost = false;
+        async.elapse(const Duration(milliseconds: 10));
+        expect(monitor.isMonitoring, isTrue);
+        // Input in the gap went unseen: it counts as local input.
+        expect(events, 1);
+        async.elapse(const Duration(milliseconds: 100));
+        expect(events, 1);
+        sub.cancel();
+      });
+    });
+
+    test('a stale heartbeat (a stuck hook thread) stops monitoring', () {
+      fakeAsync((async) {
+        final native = FakeNativeActivity();
+        final monitor = WindowsLocalActivity(native);
+        var events = 0;
+        final sub = monitor.activity.listen((_) => events++);
+        native.heartbeatAge = 400;
+        async.elapse(const Duration(milliseconds: 10));
+        expect(monitor.isMonitoring, isTrue);
+        native.heartbeatAge = 401;
+        async.elapse(const Duration(milliseconds: 10));
+        expect(monitor.isMonitoring, isFalse);
+        // Counted input still emits while unhealthy.
+        native.counter++;
+        async.elapse(const Duration(milliseconds: 10));
+        expect(events, 1);
+        native.heartbeatAge = 20;
+        async.elapse(const Duration(milliseconds: 10));
+        expect(monitor.isMonitoring, isTrue);
+        expect(events, 2);
+        sub.cancel();
+      });
+    });
+
+    test('a hook thread that has exited is started again', () {
+      fakeAsync((async) {
+        final native = FakeNativeActivity();
+        final monitor = WindowsLocalActivity(native);
+        final sub = monitor.activity.listen((_) {});
+        expect(native.starts, 1);
+        // The thread left its loop: no heartbeat, no hooks.
+        native.running = false;
+        async.elapse(const Duration(milliseconds: 10));
+        expect(monitor.isMonitoring, isFalse);
+        async.elapse(const Duration(milliseconds: 980));
+        expect(native.starts, 1);
+        async.elapse(const Duration(milliseconds: 10));
+        expect(native.starts, 2);
+        async.elapse(const Duration(milliseconds: 10));
+        expect(monitor.isMonitoring, isTrue);
+        // Healthy again: no more starts.
+        async.elapse(const Duration(seconds: 3));
+        expect(native.starts, 2);
+        sub.cancel();
+        expect(monitor.isMonitoring, isFalse);
+      });
+    });
+
+    test('a start that reports no hooks is not monitoring', () {
+      fakeAsync((async) {
+        final native = FakeNativeActivity()..hooksLost = true;
+        final monitor = WindowsLocalActivity(native);
+        final sub = monitor.activity.listen((_) {});
+        expect(monitor.isMonitoring, isFalse);
+        sub.cancel();
+      });
+    });
+  });
 }

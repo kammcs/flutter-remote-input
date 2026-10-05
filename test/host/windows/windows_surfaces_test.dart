@@ -7,10 +7,29 @@ import 'package:remote_input/src/host/windows/windows_surfaces.dart';
 
 import 'fake_win32.dart';
 
+// The shared app: process 7, the shared window's thread 70.
 const int _shared = 0x1000;
 const int _sharedChild = 0x1001;
-const int _sharedPopup = 0x1002;
+const int _dialog = 0x1003; // Owned by the shared window, another thread.
+const int _dialogPopup = 0x1004; // Owned by the dialog.
+const int _menu = 0x1005; // A #32768 menu of thread 70, unowned.
+const int _dropDown = 0x1006; // An unowned tool popup of thread 70.
+const int _sibling = 0x1007; // Another top-level window of thread 70.
+const int _popupOnTaskbar = 0x1008; // Unowned WS_POPUP, no tool style.
+const int _appWindowPopup = 0x1009; // Tool popup forced onto the taskbar.
+const int _otherThreadMenu = 0x100A; // A menu of thread 72 (the taskbar's).
+const int _otherThreadWindow = 0x100B; // The taskbar, the desktop.
+const int _ownedBySibling = 0x100C; // A popup of thread 70's other window.
+const int _crossProcessOwned = 0x100D; // Process 9, owned by the shared.
+const int _cycleA = 0x100E; // Owns _cycleB, which owns it.
+const int _cycleB = 0x100F;
 const int _other = 0x2000;
+// The host app itself: FakeWin32Api.currentProcessId.
+const int _own = 0x3000;
+const int _ownChild = 0x3001;
+
+const int _popup = WindowStyle.popup;
+const int _tool = WindowStyle.exToolWindow;
 
 void main() {
   late FakeWin32Api api;
@@ -33,10 +52,65 @@ void main() {
         ),
       ];
     api.windows
-      ..[_shared] = FakeWindow(pid: 7)
-      ..[_sharedChild] = FakeWindow(pid: 7, root: _shared)
-      ..[_sharedPopup] = FakeWindow(pid: 7)
-      ..[_other] = FakeWindow(pid: 8);
+      ..[_shared] = FakeWindow(pid: 7, thread: 70)
+      ..[_sharedChild] = FakeWindow(pid: 7, thread: 70, root: _shared)
+      ..[_dialog] = FakeWindow(pid: 7, thread: 71, owner: _shared)
+      ..[_dialogPopup] = FakeWindow(
+        pid: 7,
+        thread: 71,
+        owner: _dialog,
+        style: _popup,
+        exStyle: _tool,
+      )
+      ..[_menu] = FakeWindow(
+        pid: 7,
+        thread: 70,
+        style: _popup,
+        exStyle: _tool,
+        className: WindowStyle.menuClass,
+      )
+      ..[_dropDown] = FakeWindow(
+        pid: 7,
+        thread: 70,
+        style: _popup,
+        exStyle: _tool,
+        className: 'ComboLBox',
+      )
+      ..[_sibling] = FakeWindow(pid: 7, thread: 70)
+      ..[_popupOnTaskbar] = FakeWindow(pid: 7, thread: 70, style: _popup)
+      ..[_appWindowPopup] = FakeWindow(
+        pid: 7,
+        thread: 70,
+        style: _popup,
+        exStyle: _tool | WindowStyle.exAppWindow,
+      )
+      ..[_otherThreadMenu] = FakeWindow(
+        pid: 7,
+        thread: 72,
+        style: _popup,
+        exStyle: _tool,
+        className: WindowStyle.menuClass,
+      )
+      ..[_otherThreadWindow] = FakeWindow(
+        pid: 7,
+        thread: 72,
+        style: _popup,
+        exStyle: _tool,
+        className: 'Shell_TrayWnd',
+      )
+      ..[_ownedBySibling] = FakeWindow(
+        pid: 7,
+        thread: 70,
+        owner: _sibling,
+        style: _popup,
+        exStyle: _tool,
+      )
+      ..[_crossProcessOwned] = FakeWindow(pid: 9, owner: _shared)
+      ..[_cycleA] = FakeWindow(pid: 7, thread: 70, owner: _cycleB)
+      ..[_cycleB] = FakeWindow(pid: 7, thread: 70, owner: _cycleA)
+      ..[_other] = FakeWindow(pid: 8)
+      ..[_own] = FakeWindow(pid: api.currentProcessId)
+      ..[_ownChild] = FakeWindow(pid: api.currentProcessId, root: _own);
     resolver = WindowsSurfaceResolver(api);
   });
 
@@ -178,13 +252,57 @@ void main() {
       expect(onSurfaceWith(_sharedChild), isTrue);
     });
 
-    test('windows of the same process are on it (menus, popups)', () {
-      expect(onSurfaceWith(_sharedPopup), isTrue);
+    test('windows it owns are on it, through owned windows', () {
+      expect(onSurfaceWith(_dialog), isTrue);
+      expect(onSurfaceWith(_dialogPopup), isTrue);
+      // Ownership crosses processes: the shared window asked for it.
+      expect(onSurfaceWith(_crossProcessOwned), isTrue);
+    });
+
+    test('unowned menus and tool popups of its thread are on it', () {
+      expect(onSurfaceWith(_menu), isTrue);
+      expect(onSurfaceWith(_dropDown), isTrue);
+    });
+
+    test('other windows of the same process are not', () {
+      // Another browser window on the same UI thread.
+      expect(onSurfaceWith(_sibling), isFalse);
+      // Unowned popups with a taskbar button are windows of their own.
+      expect(onSurfaceWith(_popupOnTaskbar), isFalse);
+      expect(onSurfaceWith(_appWindowPopup), isFalse);
+      // Explorer: the taskbar and its menus run on another thread.
+      expect(onSurfaceWith(_otherThreadMenu), isFalse);
+      expect(onSurfaceWith(_otherThreadWindow), isFalse);
+      // A popup of another window isn't matched by thread.
+      expect(onSurfaceWith(_ownedBySibling), isFalse);
+    });
+
+    test('an owner cycle ends', () {
+      expect(onSurfaceWith(_cycleA), isFalse);
     });
 
     test('another app is not, nor is nothing', () {
       expect(onSurfaceWith(_other), isFalse);
       expect(onSurfaceWith(0), isFalse);
+    });
+
+    test('a shared child window matches by its root window', () {
+      api.hitTest = (_, _) => _dialog;
+      expect(
+        resolver.isOnSurface(
+          const SharedSurface.window(_sharedChild),
+          Offset.zero,
+        ),
+        isTrue,
+      );
+      api.hitTest = (_, _) => _sibling;
+      expect(
+        resolver.isOnSurface(
+          const SharedSurface.window(_sharedChild),
+          Offset.zero,
+        ),
+        isFalse,
+      );
     });
 
     test('displays and rects are never occluded', () {
@@ -202,8 +320,14 @@ void main() {
     test('follows the foreground window by the same rule', () {
       api.foreground = _shared;
       expect(resolver.hasKeyboardFocus(s), isTrue);
-      api.foreground = _sharedPopup;
+      api.foreground = _sharedChild;
       expect(resolver.hasKeyboardFocus(s), isTrue);
+      api.foreground = _dialog;
+      expect(resolver.hasKeyboardFocus(s), isTrue);
+      api.foreground = _sibling;
+      expect(resolver.hasKeyboardFocus(s), isFalse);
+      api.foreground = _otherThreadWindow;
+      expect(resolver.hasKeyboardFocus(s), isFalse);
       api.foreground = _other;
       expect(resolver.hasKeyboardFocus(s), isFalse);
       api.foreground = 0;
@@ -213,6 +337,36 @@ void main() {
     test('displays always have it', () {
       api.foreground = _other;
       expect(resolver.hasKeyboardFocus(const SharedSurface.display(1)), isTrue);
+    });
+  });
+
+  group('the host app\'s own windows', () {
+    test('the root window under the point is this process\'s', () {
+      final points = <(int, int)>[];
+      var hit = _ownChild;
+      api.hitTest = (x, y) {
+        points.add((x, y));
+        return hit;
+      };
+      expect(resolver.isOwnWindowAt(const Offset(5.5, 7.9)), isTrue);
+      expect(points, [(5, 7)]);
+      hit = _own;
+      expect(resolver.isOwnWindowAt(Offset.zero), isTrue);
+      for (final other in [_shared, _other, 0]) {
+        hit = other;
+        expect(resolver.isOwnWindowAt(Offset.zero), isFalse);
+      }
+    });
+
+    test('the foreground window is this process\'s', () {
+      api.foreground = _own;
+      expect(resolver.isOwnAppInFront(), isTrue);
+      api.foreground = _ownChild;
+      expect(resolver.isOwnAppInFront(), isTrue);
+      for (final other in [_shared, _other, 0]) {
+        api.foreground = other;
+        expect(resolver.isOwnAppInFront(), isFalse);
+      }
     });
   });
 }

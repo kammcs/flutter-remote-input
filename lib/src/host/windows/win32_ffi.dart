@@ -1,5 +1,5 @@
 // The package's own minimal Win32 bindings (`docs/design.md` §7.2, open
-// question 8): about twenty-five functions, rather than a dependency on the
+// question 8): about thirty functions, rather than a dependency on the
 // `win32` package. Signatures follow the Windows SDK headers for 64-bit
 // Windows (x64 and arm64, the only targets Flutter builds): handles are
 // pointer-sized (IntPtr), BOOL/LONG/int are Int32, UINT/DWORD are Uint32.
@@ -28,6 +28,10 @@ const int _perMonitorAwareV2 = -4; // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
 const int _monitorInfoFPrimary = 0x0001;
 const int _monitorInfoExSize = 104; // sizeof(MONITORINFOEXW)
 const int _gaRoot = 2;
+const int _gwOwner = 4;
+const int _gwlStyle = -16;
+const int _gwlExStyle = -20;
+const int _classNameUnits = 256; // Class names are at most 256 characters.
 const int _dwmwaExtendedFrameBounds = 9;
 const int _dwmwaCloaked = 14;
 const int _desktopReadObjects = 0x0001;
@@ -76,6 +80,16 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
         'remote_input_activity_count',
         isLeaf: true,
       ),
+      _activityHooksInstalled = plugin
+          .lookupFunction<Int32 Function(), int Function()>(
+            'remote_input_activity_hooks_installed',
+            isLeaf: true,
+          ),
+      _activityHeartbeatAge = plugin
+          .lookupFunction<Int64 Function(), int Function()>(
+            'remote_input_activity_heartbeat_age',
+            isLeaf: true,
+          ),
       injectionTag = plugin
           .lookupFunction<Uint64 Function(), int Function()>('remote_input_tag')
           .call() {
@@ -147,6 +161,20 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
           IntPtr Function(IntPtr, Uint32),
           int Function(int, int)
         >('GetAncestor');
+    _getWindow = user32
+        .lookupFunction<
+          IntPtr Function(IntPtr, Uint32),
+          int Function(int, int)
+        >('GetWindow');
+    _getWindowLongPtr = user32
+        .lookupFunction<IntPtr Function(IntPtr, Int32), int Function(int, int)>(
+          'GetWindowLongPtrW',
+        );
+    _getClassName = user32
+        .lookupFunction<
+          Int32 Function(IntPtr, Pointer<Uint16>, Int32),
+          int Function(int, Pointer<Uint16>, int)
+        >('GetClassNameW');
     _getForegroundWindow = user32
         .lookupFunction<IntPtr Function(), int Function()>(
           'GetForegroundWindow',
@@ -229,6 +257,8 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
   final int Function() _activityStart;
   final void Function() _activityStop;
   final int Function() _activityCount;
+  final int Function() _activityHooksInstalled;
+  final int Function() _activityHeartbeatAge;
 
   // user32, kernel32, advapi32, dwmapi.
   late final int Function(int) _getSystemMetrics;
@@ -251,6 +281,9 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
   late final int Function(_Point) _windowFromPoint;
   late final int Function(int, int) _getAncestor;
   late final int Function() _getForegroundWindow;
+  late final int Function(int, int) _getWindow;
+  late final int Function(int, int) _getWindowLongPtr;
+  late final int Function(int, Pointer<Uint16>, int) _getClassName;
   late final int Function(int, Pointer<Uint32>) _getWindowThreadProcessId;
   late final int Function(int, int, int) _openInputDesktop;
   late final int Function(int, int, Pointer<Void>, int, Pointer<Uint32>)
@@ -271,6 +304,7 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
   final Pointer<_Point> _point = calloc<_Point>();
   final Pointer<Uint8> _monitorInfo = calloc<Uint8>(_monitorInfoExSize);
   final Pointer<Uint16> _desktopName = calloc<Uint16>(_desktopNameUnits);
+  final Pointer<Uint16> _className = calloc<Uint16>(_classNameUnits);
   Pointer<Uint8> _inputs = nullptr;
   int _inputsCapacity = 0;
 
@@ -290,9 +324,12 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
       _inputsCapacity = inputs.length * 2;
       _inputs = calloc<Uint8>(_inputsCapacity);
     }
-    _inputs.asTypedList(inputs.length).setAll(0, inputs);
+    final native = _inputs.asTypedList(inputs.length)..setAll(0, inputs);
     final count = inputs.length ~/ inputRecordSize;
     final sent = _sendInput(count, _inputs, inputRecordSize, _error);
+    // The records may carry typed text and key codes: don't leave them in
+    // native memory until the next call overwrites them (§6.6).
+    native.fillRange(0, inputs.length, 0);
     return (sent: sent, error: _error.value);
   }
 
@@ -417,6 +454,26 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
     return _dword.value;
   }
 
+  @override
+  int threadIdOfWindow(int hwnd) => _getWindowThreadProcessId(hwnd, nullptr);
+
+  @override
+  int ownerWindow(int hwnd) => _getWindow(hwnd, _gwOwner);
+
+  @override
+  int windowStyle(int hwnd) => _getWindowLongPtr(hwnd, _gwlStyle) & 0xFFFFFFFF;
+
+  @override
+  int windowExStyle(int hwnd) =>
+      _getWindowLongPtr(hwnd, _gwlExStyle) & 0xFFFFFFFF;
+
+  @override
+  String windowClassName(int hwnd) {
+    final n = _getClassName(hwnd, _className, _classNameUnits);
+    if (n <= 0) return '';
+    return _className.cast<Utf16>().toDartString(length: n);
+  }
+
   // --- Secure contexts ------------------------------------------------------
 
   @override
@@ -496,6 +553,12 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
 
   @override
   int count() => _activityCount();
+
+  @override
+  bool hooksInstalled() => _activityHooksInstalled() != 0;
+
+  @override
+  int heartbeatAgeMs() => _activityHeartbeatAge();
 }
 
 /// Monitors found by the running `EnumDisplayMonitors` call. The callback
