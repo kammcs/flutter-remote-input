@@ -2,7 +2,7 @@
 
 This package lets one person control another person's desktop with their keyboard and mouse, from inside a Flutter app. The **viewer** sees the **presenter's** shared screen (as video, from some other package), and their pointer and keyboard events over that view are captured, sent as a small versioned protocol over a transport the app provides, and **replayed as local input on the presenter's desktop**.
 
-- **Status:** pre-release (October 2026). Milestone M0 (scaffold and CI) is done. Nothing in this document is built yet; it is the plan the package is built from.
+- **Status:** pre-release (October 2026). M0 (scaffold) and M1 (the protocol, the codec, the host's Dart core, the viewer controller and the test fakes) are done. The platform injectors (M2, M3), the capture widget (M4) and the native safety detectors (M5) aren't built yet; for those, this document is the plan.
 - **Companion docs:** [roadmap.md](roadmap.md) (milestones, success criteria, the consumer checkpoint).
 - Statements marked **(verify)** are believed true from documentation or forum answers but haven't been checked on a device. Each one has a milestone that checks it, and the result replaces the mark.
 
@@ -42,6 +42,8 @@ The first consumer is buildIt.Social, a private app with chat, video calls and s
 4. **Safety primitives** (§6) that apps build their consent experience on: off by default, instant stop, local input wins, rate limits and bounds checks, and no injection into elevated or secure-input contexts.
 
 ### 2.2 Platforms
+
+**The goal: any device can control a desktop.** A phone, a tablet, a browser, or another desktop runs the viewer; a Windows PC or a Mac is controlled. Phones and browsers are first-class viewers, not an afterthought: touch input gets its own modes (§8), and the soft keyboard goes through the text path (§5.4). Phones themselves can't be controlled (below).
 
 | Role | Windows | macOS | Linux | Web | iOS | Android |
 |---|---|---|---|---|---|---|
@@ -141,7 +143,7 @@ abstract interface class InputChannel {
 
 - **One link per host session and viewer, bound by the app to one authenticated peer.** The package never reads identity from a payload. A link must deliver messages from that peer only: an app that receives everything on a shared channel filters by the transport's verified sender before passing messages on (§11).
 - **Backpressure.** The viewer coalesces moves to one per frame and skips a move when the unreliable channel's `bufferedAmount` is above a threshold (16 KiB by default). Moves are never queued behind each other.
-- **In the package:** `InputLink.memoryPair()` (in `testing.dart`): an in-memory pair for tests and single-process demos, with optional loss, reordering and delay.
+- **In the package:** `MemoryInputLink.pair()` (in `testing.dart`): an in-memory pair for tests and single-process demos, with optional loss, reordering and delay. (A static on `InputLink` itself can't live in `testing.dart`, hence the separate class.)
 - **In the example (M6):** a WebSocket link for two machines on a LAN (both channels on one socket; **plaintext, development only**), and a reference adapter for `cloudflare_realtime`'s DataChannels (§9).
 
 ## 5. Wire protocol v1
@@ -183,12 +185,14 @@ The host sends `HostHello` when the app enables a session and the link is open. 
 
 | Type | Name | Channel | Body |
 |---|---|---|---|
-| `0x10` | `PointerMove` | unreliable | `surfaceEpoch u16`, `x u16`, `y u16`, `buttons u8` (held, as a bitmask; a consistency check) |
+| `0x10` | `PointerMove` | unreliable | `surfaceEpoch u16`, `x u16`, `y u16`, `buttons u8` (held, as a bitmask; a consistency check), `reliableSeq u32` (the last reliable input sent before this move, or the move's own `seq` if none; §5.3) |
 | `0x11` | `PointerButton` | reliable | `surfaceEpoch u16`, `x u16`, `y u16`, `button u8` (left, right, middle, back, forward), `down u8`, `clickCount u8` |
 | `0x12` | `Wheel` | reliable | `surfaceEpoch u16`, `x u16`, `y u16`, `dx i16`, `dy i16`, `unit u8` (pixel, line) |
 | `0x20` | `Key` | reliable | `usage u32` (USB HID usage, §5.4), `action u8` (up, down, repeat), `modifiers u16` (the viewer's logical modifier state) |
 | `0x21` | `Text` | reliable | `length u16`, then that many bytes of UTF-8 (at most 1024) |
 | `0x22` | `ReleaseAll` | reliable | none: release every key and button this session holds |
+
+Codes for buttons, key actions, wheel units, platforms (0 unknown, 1 Windows, 2 macOS, 3 Linux, 4 iOS, 5 Android, 6 Fuchsia) and state reasons are in `lib/src/protocol/wire_types.dart`, pinned by the golden-byte tests. `HostState.reason` is a code in the enum its `state` uses (`PauseReason`, `BlockReason`, `StopReason`), and a receiver maps a code it doesn't know to `other`, so hosts can add reasons within v1. A viewer in a browser reports the OS the browser runs on (it decides the shortcuts) and sets capability bit 0 (`web`).
 
 Types `0xC0`–`0xFF` are reserved for **ignorable extensions**: a host that doesn't know one drops it silently. Any other unknown type counts as a violation (§6.4).
 
@@ -197,6 +201,7 @@ Types `0xC0`–`0xFF` are reserved for **ignorable extensions**: a host that doe
 - **Reliable messages** must arrive with increasing `seq` (gaps are normal: moves use numbers too). A reliable message whose `seq` isn't greater than the last reliable one is a duplicate or a replay: dropped and counted.
 - **Every pointer message carries its own position**, so a click lands where the viewer clicked even if the moves before it were lost.
 - **Stale-move dropping:** a `PointerMove` is applied only if its `seq` is greater than that of **every pointer message already applied**, moves and reliable ones alike. A move that arrives late, out of order, or after a click it preceded is dropped, so the pointer never jumps back.
+- **Moves never overtake clicks.** The two channels are independent, so a move can arrive before the button press the viewer sent ahead of it. Each move carries `reliableSeq`, the last reliable input sent before it, and the host holds the move (as the one pending move, replaced by any newer one) until that message has arrived and been handled. Found by M1's tests: without it, a drag's first move could land before the double click that started it.
 - **Coalescing:** the host keeps only the newest pending move and injects at most one per 4 ms (250 Hz). Excess moves are dropped, never queued.
 - **Drags:** a button down (reliable) at its point, moves (unreliable; losses don't matter), and a button up (reliable) at its point. On macOS, moves with a button held are posted as drag events (`kCGEventLeftMouseDragged` and the others), or apps don't see a drag.
 - **Click count:** the viewer counts clicks itself (its OS double-click interval and slop) and sends `clickCount`. macOS needs it on the posted event (`kCGMouseEventClickState`); Windows derives double-clicks from timing, so network jitter can split a double-click, and the Windows injector replays a `clickCount` of 2 or more with tight timing if needed (open question 6).
@@ -214,7 +219,7 @@ Two paths, chosen per keystroke on the viewer:
 - **`physical`:** every key by position, lock keys included. For games, terminals, or the same layout on both ends.
 - **`text`:** printable input by text only, and non-printing keys physically.
 
-**Modifiers.** Each `Key` carries the viewer's modifier state, and the host corrects drift: if it holds an injected Shift the viewer no longer reports, it releases it. **Cross-platform shortcuts:** with `ModifierMapping.auto` (open question 7), a macOS viewer's Cmd becomes Ctrl on a Windows presenter, and a Windows viewer's Ctrl becomes Cmd on a macOS presenter, so copy, paste and undo work as each person expects.
+**Modifiers.** Each `Key` carries the viewer's modifier state (bits: Shift 1, Control 2, Alt 4, Meta 8), and the host corrects drift: if it holds an injected Shift the viewer no longer reports, it releases it. **Cross-platform shortcuts:** with `ModifierMapping.auto`, the default, when exactly one end is an Apple platform (macOS or iOS), the host swaps Control and Meta (Command, the Windows key) in both keys and modifier bits. So a Mac viewer's Cmd+C is Ctrl+C on a Windows presenter, and a Windows viewer's Ctrl+C is Cmd+C on a Mac. Alt and Option are the same key either way. `ModifierMapping.none` sends keys by position, unchanged. The mapping happens on the host, which knows both platforms from the handshake.
 
 **Keys that can't or won't be injected:**
 
@@ -279,7 +284,9 @@ Defaults, which the app can lower but not raise past the caps:
 - **Coordinates** can only name a point inside the surface (they're normalized); points are clamped to it, and a stale `surfaceEpoch` is dropped.
 - **Window surfaces:** a pointer event whose point isn't on the shared window, because another window covers it there, is dropped (`occluded`; open question 5 for the same app's menus and popups). **Keys are injected only while the shared window is in front**; otherwise they are dropped and the viewer is told.
 - **Display surfaces confine the pointer, not the keyboard.** Keys go to whatever window has focus on that machine, including windows on other displays. Apps should say so in their consent text (§11).
-- **Violations** (malformed, unknown type, replayed `seq`, over a rate limit, wrong session tag) are dropped and counted in `session.stats`. More than 50 in 10 s, or a queue overflow, **stops the session** with `stopped(protocolViolation)` or `stopped(flooding)`.
+- **Over the rate limits, reliable input queues; it isn't dropped.** Dropping a key release would leave a key stuck, so keys, buttons, wheel events and text wait in one ordered queue for their token bucket. Long text is typed in pieces as tokens refill. Moves wait while the queue isn't empty, so they never overtake it. A full queue stops the session with `stopped(flooding)`.
+- **Text never acts like keys.** Control characters other than tab, line feed and carriage return (Escape, Backspace, the C1 range) are stripped from `Text` before it's typed.
+- **Violations** (malformed, unknown type, replayed `seq`, wrong session tag, wrong channel, a host-only message, oversized) are dropped and counted in `session.stats`. More than 50 in 10 s **stops the session** with `stopped(protocolViolation)`.
 
 ### 6.5 No injection into elevated or secure contexts
 
@@ -292,6 +299,8 @@ The package never asks for elevation, never installs a service, and never uses `
 | **macOS Secure Event Input:** a password field has focus, or Terminal's Secure Keyboard Entry is on | `IsSecureEventInputEnabled()` | Keys: `blocked(secureInput)`; the pointer continues |
 | **macOS session not active:** the login window, the lock screen, fast user switching | `CGSessionCopyCurrentDictionary()` (on console, screen locked) | `blocked(sessionInactive)` |
 | **macOS permission missing or revoked** | `CGPreflightPostEventAccess()` | `unavailable(permissionDenied)` |
+
+Detection is per event: each event is checked before it's injected, and a check that fails moves the session to `blocked(reason)`. While blocked, the host re-checks every 250 ms and returns to `active` when the condition clears. An injector that reports a refusal (`SendInput` failing with UIPI) blocks the session the same way, and a revoked permission stops it with `stopped(permissionDenied)`.
 
 So a remote helper **can't type into a password field on macOS** in v1, and can't operate elevated apps or UAC prompts on Windows. The presenter does those themselves. `RemoteInputHost.limitations` lists these per platform, for apps to show in their UI.
 
@@ -362,7 +371,7 @@ For apps' UI text (`RemoteInputHost.limitations`):
 
 Two pieces, both pure Flutter, on every platform:
 
-- **`RemoteInputViewer`**: the controller. It owns the viewer's end of the link, the handshake, `seq`, coalescing and backpressure, and mirrors the host's state (`waiting`, `active`, `paused(reason)`, `blocked(reason)`, `stopped(reason)`) for the app's UI. It sends nothing until the host says `active`.
+- **`RemoteInputViewer`** (built in M1): the controller. It owns the viewer's end of the link, the handshake, `seq`, coalescing (at most one move per 8 ms by default) and backpressure, pings every second for the round-trip time and as a heartbeat, and mirrors the host's state (`SessionWaiting`, `SessionActive`, `SessionPaused`, `SessionBlocked`, `SessionStopped`) for the app's UI. It sends nothing until the host says `active`. Its methods take **normalized points** (`Offset(0, 0)` to `Offset(1, 1)` across the picture, clamped): `pointerMove`, `pointerButton`, `click`, `wheel`, `key`, `text`, `sendShortcut`, `releaseAll` and `close`. Apps can call them directly, without the widget.
 - **`RemoteInputCapture`**: a widget that wraps the remote video view:
 
 ```dart
@@ -378,7 +387,11 @@ RemoteInputCapture(
 It computes the content rect from `contentSize` and `fit` (or takes `contentRect` for custom layouts) and maps events into it (§3.1).
 
 - **Pointer (mouse and trackpad):** `Listener` for down, move, up, hover and signals. Buttons map from Flutter's `kPrimaryButton` and the others. Scroll signals and trackpad pan-zoom become `Wheel` messages (pinch is ignored). The view counts clicks itself (§5.3). Moves are coalesced to one per frame.
-- **Touch (phones and tablets):** direct mode in v1. A tap is a left click at the finger, a long press a right click, a one-finger drag a left-button drag, and a two-finger drag a scroll. Pinch zooms the local view and isn't sent. A trackpad-style relative mode is a later option.
+- **Touch (phones and tablets).** Phones controlling desktops is a primary use, and a desktop shown on a phone is small, so v1 has **two touch modes**, switchable at any time:
+  - **Trackpad (the default on phones):** the viewer draws its own cursor over the video, and a finger moves it relatively, like a laptop trackpad, so the fingertip never hides the target and small targets can be hit. Tap clicks at the cursor, two-finger tap right-clicks, tap-and-drag drags, and a two-finger drag scrolls. The viewer still sends **absolute normalized positions** (the cursor's), so this needs no protocol change, and the host can't tell the modes apart.
+  - **Direct (the default on tablets):** a tap is a left click at the finger, a long press a right click, a one-finger drag a left-button drag, and a two-finger drag a scroll.
+  - In both, pinch zooms and pans the local view (it isn't sent), so a phone user can zoom in on part of a large desktop.
+- **Keys a soft keyboard lacks:** the widget offers an optional key bar (Esc, Tab, Ctrl, Alt, Cmd/Win, the arrows, function keys, and sticky modifiers) built on `viewer.key()` and `sendShortcut()`. Soft-keyboard typing goes by the text path.
 - **Keyboard:** a `Focus` node takes `HardwareKeyboard` events while the view has focus and control is active. In `auto` mode (§5.4) a `TextInputClient` (the delta client) is attached at the same time, so dead keys, IMEs and soft keyboards produce **committed text**, which goes as `Text`. Composing text shows only on the viewer, in a small overlay, until it's committed. Making the key path and the text path agree without sending a character twice is the hardest part of capture, and it differs per platform; M4 settles it with tests on every viewer platform (open question 11).
 - **Leaving capture:** the view releases keyboard focus on a configurable `releaseShortcut`, and sends `ReleaseAll` whenever it loses focus.
 - **Latency:** `viewer.stats` keeps the round-trip time from `Ping`/`Pong`.
@@ -413,7 +426,7 @@ What the app gets from the package to build its consent experience: `ControlSess
 
 ## 10. Public API sketch
 
-Names and shapes are proposals for M1 to settle. Style follows `cloudflare_realtime`'s: a getter for the value now, a `…Changes` stream that replays it, `…Options` for option classes, `final` value types and `sealed` state and exception roots.
+M1 settled these names; the widget's are still proposals for M4. Style follows `cloudflare_realtime`'s: a getter for the value now, a `…Changes` stream that replays it, `…Options` for option classes, `final` value types and `sealed` state and exception roots.
 
 ```dart
 import 'package:remote_input/remote_input.dart';
@@ -453,12 +466,14 @@ session.stop();                                     // synchronous; also RemoteI
 // --- Viewer (any platform) --------------------------------------------------
 final viewer = RemoteInputViewer(link: link);
 viewer.stateChanges.listen(updateControlBadge);
+viewer.click(const Offset(0.5, 0.5));               // normalized; or let the widget do it
 RemoteInputCapture(viewer: viewer, contentSize: videoSize, child: videoView);
 await viewer.close();
 
 // --- Tests (package:remote_input/testing.dart) -------------------------------
-final (hostLink, viewerLink) = InputLink.memoryPair(loss: 0.05, reorder: true);
-final injector = RecordingInjector();               // records what would have been injected
+final pair = MemoryInputLink.pair(loss: 0.05, reorder: true); // .host, .viewer
+final platform = FakeHostPlatform();                // RecordingInjector and the other fakes
+final testHost = RemoteInputHost(platform: platform);
 ```
 
 ## 11. Security model and threats
@@ -510,7 +525,7 @@ For the agent building the package to resolve. Record each answer here (and in t
 4. **macOS window bounds per event:** how fast is `CGWindowListCopyWindowInfo` for one window? Pick a cache lifetime, or follow window moves another way.
 5. **Occlusion and the shared app's own windows:** should menus, popups and dialogs of the shared window's process count as the shared window? (Probably yes for menus; decide with tests.)
 6. **Double-clicks on Windows** across network jitter: replay `clickCount` with tight timing, or trust Windows' own timing?
-7. **Cross-platform modifier mapping:** default `auto` (Cmd ↔ Ctrl between macOS and Windows) or `none`? What about Option/Alt and the Windows key?
+7. ~~**Cross-platform modifier mapping.**~~ **Answered (M1):** `auto` by default, swapping Control and Meta when exactly one end is Apple; Alt/Option unchanged (§5.4).
 8. **`win32` or own bindings** on Windows: the `win32` package is large but maintained; about fifteen functions are needed.
 9. **Pixel wheel deltas on Windows:** how to convert trackpad pixels to `WHEEL_DELTA` units so scrolling feels the same as local scrolling.
 10. **macOS event source and flags:** which `CGEventSourceStateID` keeps injected modifiers from mixing with the local user's, and how text events should set flags while the viewer holds Shift.

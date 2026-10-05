@@ -2,7 +2,9 @@
 
 Remote keyboard and mouse control for Flutter apps. A **viewer** watching someone's shared screen (through any video package) can move the pointer, click, scroll and type, and the **presenter's** app replays that input on their own desktop.
 
-> **Pre-release.** Nothing is implemented yet: this repository holds the design and the scaffold. The package isn't on pub.dev (`publish_to: none`). The API will change.
+Any device can be the viewer: a phone, a tablet, a browser or a desktop. Windows and macOS desktops can be controlled.
+
+> **Pre-release.** The wire protocol, the host's safety core and the viewer controller are built and tested in pure Dart (milestone M1). The Windows and macOS injectors and the capture widget aren't yet, so nothing is injected on a real machine. The package isn't on pub.dev (`publish_to: none`). The API will change.
 
 > **CI is off for now.** The workflow is kept in `.github/workflows/`, but GitHub Actions is disabled on this repository. `dart format`, `flutter analyze`, `flutter test` and gitleaks run locally before each push.
 
@@ -20,7 +22,7 @@ Remote keyboard and mouse control for Flutter apps. A **viewer** watching someon
 | Presenter (is controlled) | Planned | Planned | Not planned | No | No | Not planned |
 | Viewer (controls) | Planned | Planned | Planned | Planned | Planned | Planned |
 
-Browsers and iOS can't inject input into the operating system. Linux under Wayland and Android have no general way to do it that fits a generic package. [The design](docs/design.md#22-platforms) explains each one.
+Phones and browsers are first-class viewers, with a trackpad-style touch mode so a desktop can be driven from a small screen. Browsers and iOS can't inject input into the operating system. Linux under Wayland and Android have no general way to do it that fits a generic package. [The design](docs/design.md#22-platforms) explains each one.
 
 ## Safety stance
 
