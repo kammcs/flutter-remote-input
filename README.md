@@ -4,6 +4,8 @@ Remote keyboard and mouse control for Flutter apps. A **viewer** watching someon
 
 > **Pre-release.** Nothing is implemented yet: this repository holds the design and the scaffold. The package isn't on pub.dev (`publish_to: none`). The API will change.
 
+> **CI is off for now.** The workflow is kept in `.github/workflows/`, but GitHub Actions is disabled on this repository. `dart format`, `flutter analyze`, `flutter test` and gitleaks run locally before each push.
+
 ## What it will do
 
 - **A versioned wire protocol** that works over any transport you give it: two message channels, one reliable and one unreliable. WebRTC DataChannels fit; so does a WebSocket. Coordinates are normalized to the shared screen or window, so desktop coordinates never travel.

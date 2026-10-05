@@ -32,6 +32,7 @@ The package injects input into someone's computer. **Safety is part of the API, 
 
 - **Flutter:** 3.47.3 / Dart 3.13.3.
 - **Before committing:** `dart format .`, `flutter analyze` and `flutter test` (and `flutter test` in `example/`). CI runs all of them, gitleaks, and debug builds of the example on Windows and macOS.
+- **CI is off for now** (the owner disabled GitHub Actions on this repo, 2026-10-05). The workflow file stays in `.github/workflows/`, but nothing runs on push: run these checks, and gitleaks through the pre-commit hook, locally before every push. Without CI there is no Windows build check either, so Windows changes need a Windows machine.
 - **Pre-commit hook:** enable it once per clone with `git config core.hooksPath .githooks`. It runs `gitleaks git --staged`; commits fail if gitleaks isn't on `PATH`.
 - The `public_member_api_docs` lint is on: document every public member.
 - **Web must keep compiling.** The viewer side runs in browsers, so `dart:ffi` and `dart:io` stay behind conditional imports. Check with `flutter build web` in `example/` when you touch imports.
