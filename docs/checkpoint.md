@@ -153,6 +153,11 @@ Built and unit-tested on macOS; the native C++ was compile-checked with mingw-w6
 5. Secure contexts (§6.5): keys and pointer blocked over an admin app (Task Manager), both by the integrity check and by `SendInput` refusing. UAC, Ctrl+Alt+Del and the lock screen show `secureDesktop` (check whether Win+L leaves the input desktop as `Default`). AppContainer/Store apps are not reported as elevated.
 6. §7.2: back/forward buttons reach Flutter; both wheel axes scroll and feel right; extended keys (arrows, right Ctrl) and media keys work by scan code; emoji (surrogate pairs) type correctly.
 7. `RemoteInputHost.isSupported` is true in the example, and `checkAvailable()` is `null` under Flutter's PerMonitorV2 manifest.
+8. **Review fixes (M7):**
+   - *Own windows:* share a display; the viewer clicks the host app's Stop button or consent dialog: nothing happens. With the host app in front, viewer keys are blocked (`hostAppInFront`); with another app in front, keys work.
+   - *Movement while the viewer moves:* while the viewer drags or moves continuously, move the physical mouse slowly (about 1 cm): the session pauses within 50 ms. Resting a hand on the mouse or tapping the desk doesn't pause it.
+   - *Hook health:* `remote_input_test.exe`'s `HealthFollowsTheHookThread` passes. Freeze the process about 2 s (debugger break, or Process Explorer's suspend), resume: during the freeze the session shows `blocked(localInputUnmonitored)`, then it pauses once for local input and resumes, and physical input still pauses it. Leave a session idle 60 s, then type on the physical keyboard: it pauses (the 15 s re-hooks work).
+   - *Window ownership:* share one File Explorer window: its context menus, ribbon drop-downs and Properties dialog work; clicks on the taskbar, the desktop, Start and another Explorer window are dropped; after Win+R on the host, viewer keys are blocked. Share one Edge or Chrome window: its menus, `<select>` drop-downs, autofill and print/save dialogs work; a second window of the same browser over it drops clicks and blocks keys. Share Notepad: the File menu, the Font dialog and its drop-downs work.
 
 ### C2. macOS: the Accessibility grant and the injection test
 
