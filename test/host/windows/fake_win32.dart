@@ -217,6 +217,25 @@ final class FakeNativeActivity implements NativeActivity {
 
   @override
   int count() => counter;
+
+  /// The native reason counts, by reason.
+  final Map<NativeActivityReason, int> reasons = {};
+
+  /// The longest heartbeat gap, in milliseconds.
+  int longestGap = 100;
+
+  /// Counts one [reason], growing [counter] as the native side does (a
+  /// stall alone doesn't).
+  void countReason(NativeActivityReason reason) {
+    reasons[reason] = (reasons[reason] ?? 0) + 1;
+    if (reason != NativeActivityReason.stall) counter++;
+  }
+
+  @override
+  int reasonCount(NativeActivityReason reason) => reasons[reason] ?? 0;
+
+  @override
+  int longestGapMs() => longestGap;
 }
 
 /// Decodes an array of `INPUT` records, as Windows would read it.

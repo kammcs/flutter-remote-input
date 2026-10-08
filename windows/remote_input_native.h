@@ -49,14 +49,37 @@ REMOTE_INPUT_NATIVE_EXPORT void remote_input_activity_stop(void);
 // Local input events seen since the DLL loaded: every key and button event
 // and wheel notch not tagged by this process, every burst of untagged
 // pointer movement past 4 pixels of travel (see MouseHook in the .cpp), and
-// every stall of the hook thread (input in it may have gone unseen). Only
-// grows.
+// every stall of the hook thread that hid input from the hooks. Only grows.
 REMOTE_INPUT_NATIVE_EXPORT uint64_t remote_input_activity_count(void);
 
 // 1 while the hook thread runs with both hooks installed by its last
 // (re)install, 0 otherwise. Windows removes low-level hooks silently, so
 // this alone doesn't prove they're alive: read the heartbeat too.
 REMOTE_INPUT_NATIVE_EXPORT int32_t remote_input_activity_hooks_installed(void);
+
+// Why remote_input_activity_count grew, for diagnostics: counts only.
+//
+// - MISSED: a stall of the hook thread during which Windows recorded input
+//   the hooks never saw.
+// - KEY, BUTTON (buttons and wheel notches), MOVE (a burst of untagged
+//   movement past the threshold): input the package didn't inject.
+// - STALL: every heartbeat gap over 200 ms, whether or not it hid input.
+//   Not counted as local input itself: MISSED is.
+#define REMOTE_INPUT_REASON_MISSED 0
+#define REMOTE_INPUT_REASON_KEY 1
+#define REMOTE_INPUT_REASON_BUTTON 2
+#define REMOTE_INPUT_REASON_MOVE 3
+#define REMOTE_INPUT_REASON_STALL 4
+#define REMOTE_INPUT_REASON_COUNT 5
+
+// How many times [reason] (a REMOTE_INPUT_REASON_ value) was counted since
+// the DLL loaded, or 0 for an unknown reason. Only grows.
+REMOTE_INPUT_NATIVE_EXPORT uint64_t
+remote_input_activity_reason_count(int32_t reason);
+
+// The longest gap between two heartbeats of the hook thread since the DLL
+// loaded, in milliseconds. About 100 when the thread is never delayed.
+REMOTE_INPUT_NATIVE_EXPORT uint64_t remote_input_activity_longest_gap(void);
 
 // Milliseconds since the hook thread's message loop last handled its
 // heartbeat timer (every 100 ms), or -1 if the thread isn't running. A
@@ -66,6 +89,17 @@ REMOTE_INPUT_NATIVE_EXPORT int64_t remote_input_activity_heartbeat_age(void);
 
 #if defined(__cplusplus)
 }  // extern "C"
+
+namespace remote_input {
+
+// Whether a stall of the hook thread hid input from the hooks: Windows'
+// last-input time [last_input] is more than a clock tick later than the
+// newest event the hooks saw, [last_seen] (both GetTickCount()). Fails
+// closed: true when the last-input time isn't known. Exposed for the tests.
+bool StallMissedInput(bool last_input_known, uint32_t last_input,
+                      uint32_t last_seen);
+
+}  // namespace remote_input
 #endif
 
 #endif  // FLUTTER_PLUGIN_REMOTE_INPUT_NATIVE_H_

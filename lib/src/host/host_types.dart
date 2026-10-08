@@ -85,6 +85,60 @@ enum ViolationKind {
   wrongDirection,
 }
 
+/// What the host's local-input monitor counted as local input
+/// (`docs/design.md` §6.3). Counted in `LocalInputCounts.counted`.
+enum LocalInputSource {
+  /// A key the package didn't inject.
+  key,
+
+  /// A mouse button or wheel notch the package didn't inject.
+  button,
+
+  /// A burst of pointer movement past the platform's threshold that the
+  /// package didn't inject.
+  move,
+
+  /// A stall of the monitor during which the OS recorded input the monitor
+  /// never saw.
+  missed,
+
+  /// The monitor coming back after its hooks were out, so input in the gap
+  /// went unseen.
+  monitorGap,
+}
+
+/// Why the host's local-input monitor reported local input, for
+/// diagnostics: counts and timings only, never what was typed or where
+/// (`docs/design.md` §6.6). Since the monitor's native code loaded, so
+/// across sessions: compare two readings for one session.
+final class LocalInputCounts {
+  /// Creates a [LocalInputCounts].
+  const LocalInputCounts({
+    required this.counted,
+    required this.stalls,
+    required this.longestGapMs,
+  });
+
+  /// Local input, by source. Sources with none are absent.
+  final Map<LocalInputSource, int> counted;
+
+  /// Stalls of the monitor's thread, whether or not they hid input. Only
+  /// [LocalInputSource.missed] counts as local input.
+  final int stalls;
+
+  /// The longest gap between two heartbeats of the monitor's thread, in
+  /// milliseconds (about 100 when it's never delayed).
+  final int longestGapMs;
+
+  /// All local input.
+  int get total => counted.values.fold(0, (a, b) => a + b);
+
+  @override
+  String toString() =>
+      'LocalInputCounts(${[for (final e in counted.entries) '${e.key.name}: ${e.value}'].join(', ')}, '
+      'stalls: $stalls, longestGapMs: $longestGapMs)';
+}
+
 /// A session's counters. Counts and timings only: never what was typed or
 /// where (`docs/design.md` §6.6).
 final class SessionStats {
@@ -95,6 +149,7 @@ final class SessionStats {
     required this.ignored,
     required this.dropped,
     required this.violations,
+    this.localInput,
   });
 
   /// Messages received from the viewer.
@@ -111,6 +166,11 @@ final class SessionStats {
 
   /// Violations, by kind. Kinds with none are absent.
   final Map<ViolationKind, int> violations;
+
+  /// What the local-input monitor counted, and why: for finding what
+  /// paused a session with `PauseReason.localInput`. `null` where the
+  /// platform's monitor doesn't break it down (macOS, for now).
+  final LocalInputCounts? localInput;
 
   /// All dropped input.
   int get totalDropped => dropped.values.fold(0, (a, b) => a + b);

@@ -1,5 +1,8 @@
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:remote_input/remote_input.dart' show LocalInputSource;
+import 'package:remote_input/src/host/windows/win32_api.dart'
+    show NativeActivityReason;
 import 'package:remote_input/src/host/windows/windows_activity.dart';
 
 import 'fake_win32.dart';
@@ -109,7 +112,90 @@ void main() {
         native.heartbeatAge = 20;
         async.elapse(const Duration(milliseconds: 10));
         expect(monitor.isMonitoring, isTrue);
+        // Only late, with the hooks in: the native side judges the stall,
+        // so recovering alone isn't local input (RIN-39).
+        expect(events, 1);
+        sub.cancel();
+      });
+    });
+
+    test('a late heartbeat under load is not local input (RIN-39)', () {
+      fakeAsync((async) {
+        final native = FakeNativeActivity();
+        final monitor = WindowsLocalActivity(native);
+        var events = 0;
+        final sub = monitor.activity.listen((_) => events++);
+        // A full-screen share and a stream of injected events delay the
+        // hook thread: its stalls hid nothing.
+        for (var i = 0; i < 20; i++) {
+          native
+            ..heartbeatAge = 450
+            ..longestGap = 450;
+          async.elapse(const Duration(milliseconds: 20));
+          native
+            ..countReason(NativeActivityReason.stall)
+            ..heartbeatAge = 10;
+          async.elapse(const Duration(milliseconds: 20));
+        }
+        expect(events, 0);
+        expect(monitor.isMonitoring, isTrue);
+        final counts = monitor.localInputCounts;
+        expect(counts.total, 0);
+        expect(counts.stalls, 20);
+        expect(counts.longestGapMs, 450);
+        sub.cancel();
+      });
+    });
+
+    test('a stall that hid input is local input, by reason', () {
+      fakeAsync((async) {
+        final native = FakeNativeActivity();
+        final monitor = WindowsLocalActivity(native);
+        var events = 0;
+        final sub = monitor.activity.listen((_) => events++);
+        native
+          ..countReason(NativeActivityReason.stall)
+          ..countReason(NativeActivityReason.missed);
+        async.elapse(const Duration(milliseconds: 10));
+        expect(events, 1);
+        native
+          ..countReason(NativeActivityReason.key)
+          ..countReason(NativeActivityReason.button)
+          ..countReason(NativeActivityReason.move);
+        async.elapse(const Duration(milliseconds: 10));
         expect(events, 2);
+        final counts = monitor.localInputCounts;
+        expect(counts.counted, {
+          LocalInputSource.missed: 1,
+          LocalInputSource.key: 1,
+          LocalInputSource.button: 1,
+          LocalInputSource.move: 1,
+        });
+        expect(counts.stalls, 1);
+        sub.cancel();
+      });
+    });
+
+    test('recovering from lost hooks counts as a monitor gap', () {
+      fakeAsync((async) {
+        final native = FakeNativeActivity();
+        final monitor = WindowsLocalActivity(native);
+        var events = 0;
+        final sub = monitor.activity.listen((_) => events++);
+        // Lost, then late too, then back.
+        native.hooksLost = true;
+        async.elapse(const Duration(milliseconds: 10));
+        native
+          ..hooksLost = false
+          ..heartbeatAge = 450;
+        async.elapse(const Duration(milliseconds: 10));
+        expect(events, 0);
+        native.heartbeatAge = 10;
+        async.elapse(const Duration(milliseconds: 10));
+        expect(events, 1);
+        expect(monitor.localInputCounts.counted, {
+          LocalInputSource.monitorGap: 1,
+        });
         sub.cancel();
       });
     });
