@@ -1,4 +1,5 @@
 // Tests for the fixes from the safety review (H1, M1, M3, M5, L1–L5, L8).
+import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui';
 
@@ -275,6 +276,27 @@ void main() {
       expect(RemoteInputHost.activeSession, isNull);
     });
   });
+
+  test('the viewer survives a transport that throws on send', () {
+    fakeAsync((async) {
+      final pair = MemoryInputLink.pair();
+      RemoteInputHost(platform: FakeHostPlatform())
+          .enable(link: pair.host, surface: const SharedSurface.display(1));
+      final link = _ThrowingLink(pair.viewer);
+      final viewer = RemoteInputViewer(link: link);
+      async.flushMicrotasks();
+      expect(viewer.state, const SessionActive());
+      link.fail = true;
+      viewer
+        ..pointerMove(const Offset(0.5, 0.5))
+        ..key(usageA, KeyAction.down)
+        ..releaseAll();
+      async.elapse(const Duration(milliseconds: 50));
+      unawaited(viewer.close());
+      async.flushMicrotasks();
+      expect(viewer.state, const SessionStopped(StopReason.viewerClosed));
+    });
+  });
 }
 
 final class _ThrowingLink implements InputLink {
@@ -286,7 +308,7 @@ final class _ThrowingLink implements InputLink {
   InputChannel get reliable => _ThrowingChannel(_inner.reliable, this);
 
   @override
-  InputChannel get unreliable => _inner.unreliable;
+  InputChannel get unreliable => _ThrowingChannel(_inner.unreliable, this);
 }
 
 final class _ThrowingChannel implements InputChannel {

@@ -220,7 +220,9 @@ final class _Channel implements InputChannel {
     final out = _out;
     if (out == null || !isOpen) return;
     // Never blocks; a failed send is a lost message, like on the wire.
-    unawaited(out.send(message).catchError((Object _) {}));
+    // Future.sync also catches a synchronous throw: the channel can close a
+    // microtask before isOpen above follows it.
+    unawaited(Future.sync(() => out.send(message)).catchError((Object _) {}));
   }
 
   @override

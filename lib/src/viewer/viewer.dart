@@ -429,16 +429,24 @@ final class RemoteInputViewer {
     _seq = seqNext(_seq);
     _sent++;
     final channel = message is PointerMove ? link.unreliable : link.reliable;
-    if (channel.isOpen) {
-      channel.send(encodeMessage(message, sessionTag: tag));
-    }
+    _guardedSend(channel, encodeMessage(message, sessionTag: tag));
   }
 
   void _sendControl(WireMessage message) {
     final tag = _tag;
     if (tag == null || !link.reliable.isOpen) return;
     _sent++;
-    link.reliable.send(encodeMessage(message, sessionTag: tag));
+    _guardedSend(link.reliable, encodeMessage(message, sessionTag: tag));
+  }
+
+  /// Sends [bytes] if [channel] is open, and never lets a transport that
+  /// throws (one closing under us) stop the caller: [close] still ends.
+  void _guardedSend(InputChannel channel, Uint8List bytes) {
+    try {
+      if (channel.isOpen) channel.send(bytes);
+    } catch (_) {
+      // A lost message, like on the wire.
+    }
   }
 
   void _scheduleMove() {
