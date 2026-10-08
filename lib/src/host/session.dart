@@ -177,6 +177,10 @@ final class ControlSession {
     ignored: _ignored,
     dropped: Map.unmodifiable(_dropped),
     violations: Map.unmodifiable(_violations),
+    localInput: switch (_platform.localActivity) {
+      final LocalInputDiagnostics d => d.localInputCounts,
+      _ => null,
+    },
   );
 
   /// Stops the session, with [StopReason.byHost].

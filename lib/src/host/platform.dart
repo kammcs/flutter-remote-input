@@ -2,6 +2,7 @@ import 'dart:ui' show Offset;
 
 import '../protocol/wire_types.dart';
 import '../surface.dart';
+import 'host_types.dart' show LocalInputCounts;
 
 /// The OS services a host needs, one implementation per platform
 /// (`docs/design.md` §7.1).
@@ -128,6 +129,14 @@ abstract interface class LocalActivityMonitor {
   /// `BlockReason.localInputUnmonitored`: no injection without local-input
   /// detection (`docs/design.md` §6.3).
   bool get isMonitoring;
+}
+
+/// A [LocalActivityMonitor] that can say why it reported local input. A
+/// separate interface, so monitors without it still implement
+/// [LocalActivityMonitor] alone.
+abstract interface class LocalInputDiagnostics {
+  /// The counts so far. Cheap: read on demand, never polled.
+  LocalInputCounts get localInputCounts;
 }
 
 /// The kind of input a check is for.

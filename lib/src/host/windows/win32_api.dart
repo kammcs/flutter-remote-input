@@ -151,6 +151,40 @@ abstract interface class NativeActivity {
   /// Milliseconds since the hook thread's message loop last ran its
   /// heartbeat (every 100 ms), or -1 if the thread isn't running.
   int heartbeatAgeMs();
+
+  /// How many times [reason] grew [count] (or, for
+  /// [NativeActivityReason.stall], was seen). Only grows.
+  int reasonCount(NativeActivityReason reason);
+
+  /// The longest gap between two heartbeats so far, in milliseconds.
+  int longestGapMs();
+
+  /// Mouse moves seen, by origin: [index] is 4 with the injected flag (else
+  /// 0) plus 0 for no tag, 1 for ours, 2 for the package's from another
+  /// process, 3 for any other. For diagnostics.
+  int moveOriginCount(int index);
+
+  /// The longest single physical move so far, in whole pixels.
+  int largestPhysicalStepPx();
+}
+
+/// The native counter's reasons, in `REMOTE_INPUT_REASON_*` order
+/// (`windows/remote_input_native.h`).
+enum NativeActivityReason {
+  /// A stall that hid input from the hooks.
+  missed,
+
+  /// A physical key: not injected, by any process.
+  key,
+
+  /// A physical button or wheel notch.
+  button,
+
+  /// A burst of physical movement past the threshold.
+  move,
+
+  /// Any stall of the hook thread, counted as local input or not.
+  stall,
 }
 
 /// Window styles (winuser.h) the surface resolver reads.

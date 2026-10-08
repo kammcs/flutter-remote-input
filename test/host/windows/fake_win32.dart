@@ -217,6 +217,37 @@ final class FakeNativeActivity implements NativeActivity {
 
   @override
   int count() => counter;
+
+  /// The native reason counts, by reason.
+  final Map<NativeActivityReason, int> reasons = {};
+
+  /// The longest heartbeat gap, in milliseconds.
+  int longestGap = 100;
+
+  /// Counts one [reason], growing [counter] as the native side does (a
+  /// stall alone doesn't).
+  void countReason(NativeActivityReason reason) {
+    reasons[reason] = (reasons[reason] ?? 0) + 1;
+    if (reason != NativeActivityReason.stall) counter++;
+  }
+
+  @override
+  int reasonCount(NativeActivityReason reason) => reasons[reason] ?? 0;
+
+  @override
+  int longestGapMs() => longestGap;
+
+  /// Mouse moves by origin index (see [NativeActivity.moveOriginCount]).
+  final Map<int, int> moveOrigins = {};
+
+  /// The longest untagged step, in pixels.
+  int largestStep = 0;
+
+  @override
+  int moveOriginCount(int index) => moveOrigins[index] ?? 0;
+
+  @override
+  int largestPhysicalStepPx() => largestStep;
 }
 
 /// Decodes an array of `INPUT` records, as Windows would read it.

@@ -4,6 +4,8 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:remote_input/remote_input.dart';
 import 'package:remote_input/src/host/windows/input_records.dart';
+import 'package:remote_input/src/host/windows/win32_api.dart'
+    show NativeActivityReason;
 import 'package:remote_input/src/host/windows/windows_host.dart';
 import 'package:remote_input/testing.dart';
 
@@ -118,6 +120,39 @@ void main() {
       session.stop();
       async.flushMicrotasks();
       expect(native.running, isFalse);
+    });
+  });
+
+  test('hook-thread stalls under load keep control (RIN-39)', () {
+    fakeAsync((async) {
+      final pair = MemoryInputLink.pair();
+      final viewer = RawViewer(pair.viewer);
+      final session = RemoteInputHost(platform: platform)
+          .enable(link: pair.host, surface: const SharedSurface.window(_hwnd));
+      async.flushMicrotasks();
+      viewer.hello();
+      async.flushMicrotasks();
+      expect(session.state, const SessionActive());
+
+      // Two seconds of moves and keys, with the hook thread's heartbeat
+      // running late every 250 ms but every event seen.
+      for (var i = 0; i < 200; i++) {
+        viewer.move(i * 300, i * 300);
+        if (i % 20 == 0) viewer.key(0x00070004, KeyAction.down);
+        if (i % 20 == 1) viewer.key(0x00070004, KeyAction.up);
+        if (i % 25 == 0) native.countReason(NativeActivityReason.stall);
+        async.elapse(const Duration(milliseconds: 10));
+      }
+      expect(session.state, const SessionActive());
+      expect(session.stats.localInput!.stalls, 8);
+      expect(session.stats.localInput!.total, 0);
+
+      // A stall that hid input still pauses, and says why.
+      native.countReason(NativeActivityReason.missed);
+      async.elapse(const Duration(milliseconds: 10));
+      expect(session.state, const SessionPaused(PauseReason.localInput));
+      expect(session.stats.localInput!.counted, {LocalInputSource.missed: 1});
+      session.stop();
     });
   });
 

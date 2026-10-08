@@ -90,6 +90,26 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
             'remote_input_activity_heartbeat_age',
             isLeaf: true,
           ),
+      _activityReasonCount = plugin
+          .lookupFunction<Uint64 Function(Int32), int Function(int)>(
+            'remote_input_activity_reason_count',
+            isLeaf: true,
+          ),
+      _activityLongestGap = plugin
+          .lookupFunction<Uint64 Function(), int Function()>(
+            'remote_input_activity_longest_gap',
+            isLeaf: true,
+          ),
+      _activityMoveOrigin = plugin
+          .lookupFunction<Uint64 Function(Int32), int Function(int)>(
+            'remote_input_activity_move_origin_count',
+            isLeaf: true,
+          ),
+      _activityLargestStep = plugin
+          .lookupFunction<Uint64 Function(), int Function()>(
+            'remote_input_activity_largest_step',
+            isLeaf: true,
+          ),
       injectionTag = plugin
           .lookupFunction<Uint64 Function(), int Function()>('remote_input_tag')
           .call() {
@@ -259,6 +279,10 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
   final int Function() _activityCount;
   final int Function() _activityHooksInstalled;
   final int Function() _activityHeartbeatAge;
+  final int Function(int) _activityReasonCount;
+  final int Function() _activityLongestGap;
+  final int Function(int) _activityMoveOrigin;
+  final int Function() _activityLargestStep;
 
   // user32, kernel32, advapi32, dwmapi.
   late final int Function(int) _getSystemMetrics;
@@ -559,6 +583,19 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
 
   @override
   int heartbeatAgeMs() => _activityHeartbeatAge();
+
+  @override
+  int reasonCount(NativeActivityReason reason) =>
+      _activityReasonCount(reason.index);
+
+  @override
+  int longestGapMs() => _activityLongestGap();
+
+  @override
+  int moveOriginCount(int index) => _activityMoveOrigin(index);
+
+  @override
+  int largestPhysicalStepPx() => _activityLargestStep();
 }
 
 /// Monitors found by the running `EnumDisplayMonitors` call. The callback
