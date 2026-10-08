@@ -158,6 +158,14 @@ abstract interface class NativeActivity {
 
   /// The longest gap between two heartbeats so far, in milliseconds.
   int longestGapMs();
+
+  /// Mouse moves seen, by origin: [index] is 4 with the injected flag (else
+  /// 0) plus 0 for no tag, 1 for ours, 2 for the package's from another
+  /// process, 3 for any other. For diagnostics.
+  int moveOriginCount(int index);
+
+  /// The longest single untagged move so far, in whole pixels.
+  int largestUntaggedStepPx();
 }
 
 /// The native counter's reasons, in `REMOTE_INPUT_REASON_*` order

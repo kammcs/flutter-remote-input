@@ -111,6 +111,16 @@ std::atomic<uint64_t> g_reasons[REMOTE_INPUT_REASON_COUNT] = {};
 // The longest heartbeat gap seen, in milliseconds.
 std::atomic<uint64_t> g_longest_gap{0};
 
+// Mouse moves by origin, for diagnosing what counts (RIN-39): indexed by
+// remote_input_activity_move_origin_count's index. Counts only.
+std::atomic<uint64_t> g_move_origins[8] = {};
+// The longest single untagged move, in whole pixels: a distance, never a
+// position.
+std::atomic<uint64_t> g_largest_step{0};
+
+// Which of the move-origin counters an event with these fields goes in.
+int MoveOrigin(DWORD flags, DWORD injected_flag, ULONG_PTR extra_info);
+
 void Count(int32_t reason) {
   g_reasons[reason].fetch_add(1, std::memory_order_relaxed);
   if (reason != REMOTE_INPUT_REASON_STALL) {
@@ -165,6 +175,19 @@ bool IsOurs(DWORD flags, DWORD injected_flag, ULONG_PTR extra_info) {
          static_cast<uint64_t>(extra_info) == Tag();
 }
 
+int MoveOrigin(DWORD flags, DWORD injected_flag, ULONG_PTR extra_info) {
+  const uint64_t extra = static_cast<uint64_t>(extra_info);
+  int kind = 3;  // Some other value.
+  if (extra == 0) {
+    kind = 0;
+  } else if (extra == Tag()) {
+    kind = 1;
+  } else if ((extra & 0xFFFFFFFF00000000ull) == kTagMagic) {
+    kind = 2;  // This package's tag from another process.
+  }
+  return ((flags & injected_flag) != 0 ? 4 : 0) + kind;
+}
+
 // Adds an untagged move to pt to the path. Whether the path now counts as
 // local movement.
 bool UntaggedMoveCounts(POINT pt) {
@@ -173,7 +196,11 @@ bool UntaggedMoveCounts(POINT pt) {
   g_path_time = now;
   const double dx = static_cast<double>(pt.x) - g_previous.x;
   const double dy = static_cast<double>(pt.y) - g_previous.y;
-  g_path += std::sqrt(dx * dx + dy * dy);
+  const double step = std::sqrt(dx * dx + dy * dy);
+  if (static_cast<uint64_t>(step) > g_largest_step.load()) {
+    g_largest_step.store(static_cast<uint64_t>(step));
+  }
+  g_path += step;
   if (g_path <= kMoveThreshold) return false;
   g_path = 0;
   return true;
@@ -183,6 +210,11 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
   if (code == HC_ACTION) {
     const auto* info = reinterpret_cast<const MSLLHOOKSTRUCT*>(data);
     Seen(info->time);
+    if (message == WM_MOUSEMOVE) {
+      g_move_origins[MoveOrigin(info->flags, LLMHF_INJECTED,
+                                info->dwExtraInfo)]
+          .fetch_add(1, std::memory_order_relaxed);
+    }
     if (!IsOurs(info->flags, LLMHF_INJECTED, info->dwExtraInfo)) {
       // Buttons and the wheel always count; movement past the threshold.
       if (message != WM_MOUSEMOVE) {
@@ -422,4 +454,13 @@ uint64_t remote_input_activity_reason_count(int32_t reason) {
 
 uint64_t remote_input_activity_longest_gap(void) {
   return g_longest_gap.load(std::memory_order_relaxed);
+}
+
+uint64_t remote_input_activity_move_origin_count(int32_t index) {
+  if (index < 0 || index >= 8) return 0;
+  return g_move_origins[index].load(std::memory_order_relaxed);
+}
+
+uint64_t remote_input_activity_largest_step(void) {
+  return g_largest_step.load();
 }

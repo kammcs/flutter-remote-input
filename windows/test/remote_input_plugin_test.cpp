@@ -90,6 +90,11 @@ TEST(RemoteInputNative, ReasonCountsOnlyGrowAndRejectUnknownReasons) {
   EXPECT_GT(remote_input_activity_longest_gap(), 0u);
 }
 
+TEST(RemoteInputNative, MoveOriginCountsRejectUnknownIndexes) {
+  EXPECT_EQ(remote_input_activity_move_origin_count(-1), 0u);
+  EXPECT_EQ(remote_input_activity_move_origin_count(8), 0u);
+}
+
 TEST(RemoteInputPlugin, Constructs) { RemoteInputPlugin plugin; }
 
 }  // namespace test

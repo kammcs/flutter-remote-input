@@ -81,6 +81,18 @@ remote_input_activity_reason_count(int32_t reason);
 // loaded, in milliseconds. About 100 when the thread is never delayed.
 REMOTE_INPUT_NATIVE_EXPORT uint64_t remote_input_activity_longest_gap(void);
 
+// Mouse moves the hooks saw since the DLL loaded, by origin, for
+// diagnostics: [index] is 4 if the event had the injected flag (else 0),
+// plus 0 for no dwExtraInfo, 1 for this process's tag, 2 for this package's
+// tag from another process, 3 for any other value. 0 for an index outside
+// 0-7. Counts only.
+REMOTE_INPUT_NATIVE_EXPORT uint64_t
+remote_input_activity_move_origin_count(int32_t index);
+
+// The longest single untagged pointer move the hooks saw since the DLL
+// loaded, in whole pixels: a distance, never a position.
+REMOTE_INPUT_NATIVE_EXPORT uint64_t remote_input_activity_largest_step(void);
+
 // Milliseconds since the hook thread's message loop last handled its
 // heartbeat timer (every 100 ms), or -1 if the thread isn't running. A
 // large value means the thread is stuck, and Windows may have removed its

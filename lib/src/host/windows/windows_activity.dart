@@ -148,10 +148,18 @@ final class WindowsLocalActivity
       LocalInputSource.missed: n(NativeActivityReason.missed),
       LocalInputSource.monitorGap: _monitorGaps,
     }..removeWhere((_, v) => v == 0);
+    const tags = ['noTag', 'ours', 'otherProcess', 'otherTag'];
+    final details = <String, int>{
+      for (var i = 0; i < 8; i++)
+        '${i < 4 ? 'physical' : 'injected'}Move.${tags[i % 4]}': _native
+            .moveOriginCount(i),
+      'largestUntaggedStepPx': _native.largestUntaggedStepPx(),
+    }..removeWhere((_, v) => v == 0);
     return LocalInputCounts(
       counted: Map.unmodifiable(counted),
       stalls: n(NativeActivityReason.stall),
       longestGapMs: _native.longestGapMs(),
+      details: Map.unmodifiable(details),
     );
   }
 

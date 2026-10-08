@@ -236,6 +236,18 @@ final class FakeNativeActivity implements NativeActivity {
 
   @override
   int longestGapMs() => longestGap;
+
+  /// Mouse moves by origin index (see [NativeActivity.moveOriginCount]).
+  final Map<int, int> moveOrigins = {};
+
+  /// The longest untagged step, in pixels.
+  int largestStep = 0;
+
+  @override
+  int moveOriginCount(int index) => moveOrigins[index] ?? 0;
+
+  @override
+  int largestUntaggedStepPx() => largestStep;
 }
 
 /// Decodes an array of `INPUT` records, as Windows would read it.

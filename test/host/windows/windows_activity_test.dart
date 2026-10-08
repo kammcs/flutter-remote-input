@@ -172,6 +172,17 @@ void main() {
           LocalInputSource.move: 1,
         });
         expect(counts.stalls, 1);
+        expect(counts.details, isEmpty);
+        // Where moves came from, for diagnosis: counts and a distance.
+        native
+          ..moveOrigins[5] = 12
+          ..moveOrigins[0] = 1
+          ..largestStep = 840;
+        expect(monitor.localInputCounts.details, {
+          'physicalMove.noTag': 1,
+          'injectedMove.ours': 12,
+          'largestUntaggedStepPx': 840,
+        });
         sub.cancel();
       });
     });

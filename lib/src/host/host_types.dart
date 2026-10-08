@@ -117,6 +117,7 @@ final class LocalInputCounts {
     required this.counted,
     required this.stalls,
     required this.longestGapMs,
+    this.details = const {},
   });
 
   /// Local input, by source. Sources with none are absent.
@@ -130,13 +131,21 @@ final class LocalInputCounts {
   /// milliseconds (about 100 when it's never delayed).
   final int longestGapMs;
 
+  /// Platform-specific counters for diagnosing what counted, by name. Not
+  /// a stable API: names may change between versions. On Windows, mouse
+  /// moves by origin (`injectedMove.ours`, `physicalMove.noTag`, ...: the
+  /// injected flag, then the event's tag) and `largestUntaggedStepPx`, a
+  /// distance. Counts and distances only, never positions.
+  final Map<String, int> details;
+
   /// All local input.
   int get total => counted.values.fold(0, (a, b) => a + b);
 
   @override
   String toString() =>
       'LocalInputCounts(${[for (final e in counted.entries) '${e.key.name}: ${e.value}'].join(', ')}, '
-      'stalls: $stalls, longestGapMs: $longestGapMs)';
+      'stalls: $stalls, longestGapMs: $longestGapMs'
+      '${[for (final e in details.entries) ', ${e.key}: ${e.value}'].join()})';
 }
 
 /// A session's counters. Counts and timings only: never what was typed or
