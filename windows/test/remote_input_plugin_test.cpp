@@ -95,6 +95,32 @@ TEST(RemoteInputNative, MoveOriginCountsRejectUnknownIndexes) {
   EXPECT_EQ(remote_input_activity_move_origin_count(8), 0u);
 }
 
+// RIN-39: Windows can deliver injected mouse moves without their
+// dwExtraInfo tag. Injected input never counts, whatever its tag. A
+// zero-distance relative move: the pointer doesn't move.
+TEST(RemoteInputNative, InjectedMoveWithForeignTagIsNotLocalInput) {
+  ASSERT_EQ(remote_input_activity_start(), 1);
+  const uint64_t local = remote_input_activity_count();
+  const uint64_t seen = remote_input_activity_move_origin_count(4 + 3);
+  INPUT input = {};
+  input.type = INPUT_MOUSE;
+  input.mi.dwFlags = MOUSEEVENTF_MOVE;
+  input.mi.dwExtraInfo = 0x12345678;  // Not the package's tag.
+  uint32_t error = 0;
+  ASSERT_EQ(remote_input_send_input(1, &input, sizeof(INPUT), &error), 1u);
+  for (int i = 0; i < 50 && remote_input_activity_move_origin_count(4 + 3) ==
+                                seen;
+       i++) {
+    Sleep(20);
+  }
+  const bool delivered =
+      remote_input_activity_move_origin_count(4 + 3) > seen;
+  const uint64_t after = remote_input_activity_count();
+  remote_input_activity_stop();
+  if (!delivered) GTEST_SKIP() << "no interactive desktop delivered the move";
+  EXPECT_EQ(after, local);
+}
+
 TEST(RemoteInputPlugin, Constructs) { RemoteInputPlugin plugin; }
 
 }  // namespace test

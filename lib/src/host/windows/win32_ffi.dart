@@ -595,7 +595,7 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
   int moveOriginCount(int index) => _activityMoveOrigin(index);
 
   @override
-  int largestUntaggedStepPx() => _activityLargestStep();
+  int largestPhysicalStepPx() => _activityLargestStep();
 }
 
 /// Monitors found by the running `EnumDisplayMonitors` call. The callback

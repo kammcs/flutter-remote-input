@@ -48,13 +48,22 @@ constexpr uint64_t kTagMagic = 0x726D746900000000ull;
 
 // --- Pointer movement (docs/design.md §6.3) ---------------------------------
 //
-// Untagged pointer movement is measured on its own, so a viewer's moves
-// can't mask it. Each untagged WM_MOUSEMOVE adds its distance from the
+// Only physical input counts as local (RIN-39): an event Windows flags as
+// injected (LLMHF_INJECTED, LLKHF_INJECTED) never does, from any process
+// and with any tag. "Local input wins" is for the person at this machine,
+// whose input comes from devices. On a real host, Windows delivered this
+// package's injected mouse moves to the hook with the injected flag but
+// without its dwExtraInfo tag, so matching the tag paused every session.
+// The trade-off: input another tool injects (a second remote-control app,
+// an on-screen keyboard) doesn't pause a session.
+//
+// Physical pointer movement is measured on its own, so a viewer's moves
+// can't mask it. Each physical WM_MOUSEMOVE adds its distance from the
 // previous mouse event, whatever that event's source, to a running path
-// length. Tagged events only move that previous point: they never reset the
-// path. The path resets when kMoveGapMs pass without untagged movement, and
-// when it counts. Movement counts as local once the path is longer than
-// kMoveThreshold pixels.
+// length. Injected events only move that previous point: they never reset
+// the path. The path resets when kMoveGapMs pass without physical
+// movement, and when it counts. Movement counts as local once the path is
+// longer than kMoveThreshold pixels.
 //
 // - A physical mouse moved while a viewer streams moves at 250 Hz: each of
 //   its events lands some pixels from where the viewer's last move put the
@@ -65,10 +74,10 @@ constexpr uint64_t kTagMagic = 0x726D746900000000ull;
 // - Slow, steady physical movement keeps its path alive (its events are less
 //   than kMoveGapMs apart) and counts after a few pixels.
 
-// Pointer travel, in pixels, past which untagged movement counts.
+// Pointer travel, in pixels, past which physical movement counts.
 constexpr double kMoveThreshold = 4.0;
 
-// A gap in untagged movement this long, in milliseconds, starts a new path.
+// A gap in physical movement this long, in milliseconds, starts a new path.
 constexpr DWORD kMoveGapMs = 100;
 
 // --- Hook health (docs/design.md §6.3) --------------------------------------
@@ -114,7 +123,7 @@ std::atomic<uint64_t> g_longest_gap{0};
 // Mouse moves by origin, for diagnosing what counts (RIN-39): indexed by
 // remote_input_activity_move_origin_count's index. Counts only.
 std::atomic<uint64_t> g_move_origins[8] = {};
-// The longest single untagged move, in whole pixels: a distance, never a
+// The longest single physical move, in whole pixels: a distance, never a
 // position.
 std::atomic<uint64_t> g_largest_step{0};
 
@@ -148,8 +157,8 @@ HHOOK g_keyboard = nullptr;
 ULONGLONG g_last_beat = 0;
 ULONGLONG g_last_hooked = 0;
 POINT g_previous = {0, 0};  // The previous mouse event's position.
-double g_path = 0;          // Untagged travel in the current path, pixels.
-DWORD g_path_time = 0;      // GetTickCount() at its last untagged move.
+double g_path = 0;          // Physical travel in the current path, pixels.
+DWORD g_path_time = 0;      // GetTickCount() at its last physical move.
 DWORD g_last_seen = 0;      // The newest hooked event's time, tagged or not.
 
 // An address inside this module, for GetModuleHandleExW.
@@ -170,9 +179,8 @@ void Seen(DWORD time) {
   if (static_cast<LONG>(time - g_last_seen) > 0) g_last_seen = time;
 }
 
-bool IsOurs(DWORD flags, DWORD injected_flag, ULONG_PTR extra_info) {
-  return (flags & injected_flag) != 0 &&
-         static_cast<uint64_t>(extra_info) == Tag();
+bool IsInjected(DWORD flags, DWORD injected_flag) {
+  return (flags & injected_flag) != 0;
 }
 
 int MoveOrigin(DWORD flags, DWORD injected_flag, ULONG_PTR extra_info) {
@@ -188,9 +196,9 @@ int MoveOrigin(DWORD flags, DWORD injected_flag, ULONG_PTR extra_info) {
   return ((flags & injected_flag) != 0 ? 4 : 0) + kind;
 }
 
-// Adds an untagged move to pt to the path. Whether the path now counts as
+// Adds a physical move to pt to the path. Whether the path now counts as
 // local movement.
-bool UntaggedMoveCounts(POINT pt) {
+bool PhysicalMoveCounts(POINT pt) {
   const DWORD now = GetTickCount();
   if (now - g_path_time > kMoveGapMs) g_path = 0;
   g_path_time = now;
@@ -215,11 +223,11 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
                                 info->dwExtraInfo)]
           .fetch_add(1, std::memory_order_relaxed);
     }
-    if (!IsOurs(info->flags, LLMHF_INJECTED, info->dwExtraInfo)) {
+    if (!IsInjected(info->flags, LLMHF_INJECTED)) {
       // Buttons and the wheel always count; movement past the threshold.
       if (message != WM_MOUSEMOVE) {
         Count(REMOTE_INPUT_REASON_BUTTON);
-      } else if (UntaggedMoveCounts(info->pt)) {
+      } else if (PhysicalMoveCounts(info->pt)) {
         Count(REMOTE_INPUT_REASON_MOVE);
       }
     }
@@ -232,7 +240,7 @@ LRESULT CALLBACK KeyboardHook(int code, WPARAM message, LPARAM data) {
   if (code == HC_ACTION) {
     const auto* info = reinterpret_cast<const KBDLLHOOKSTRUCT*>(data);
     Seen(info->time);
-    if (!IsOurs(info->flags, LLKHF_INJECTED, info->dwExtraInfo)) {
+    if (!IsInjected(info->flags, LLKHF_INJECTED)) {
       Count(REMOTE_INPUT_REASON_KEY);
     }
   }

@@ -181,7 +181,7 @@ void main() {
         expect(monitor.localInputCounts.details, {
           'physicalMove.noTag': 1,
           'injectedMove.ours': 12,
-          'largestUntaggedStepPx': 840,
+          'largestPhysicalStepPx': 840,
         });
         sub.cancel();
       });

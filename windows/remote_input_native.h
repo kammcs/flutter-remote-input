@@ -22,7 +22,9 @@ extern "C" {
 
 // The value the package puts in dwExtraInfo of every event it injects:
 // "rmti" in the high 32 bits and this process's id in the low 32, so input
-// injected by another process using this package still counts as local.
+// injected by another process using this package can be told apart. Local
+// input is detected by Windows' injected flag, not by this tag (RIN-39):
+// it's for diagnostics, and for apps reading the events.
 REMOTE_INPUT_NATIVE_EXPORT uint64_t remote_input_tag(void);
 
 // sizeof(INPUT), which Dart checks against the layout it writes (40 on
@@ -46,10 +48,11 @@ REMOTE_INPUT_NATIVE_EXPORT int32_t remote_input_activity_start(void);
 // Stops the hook thread and removes its hooks. Idempotent.
 REMOTE_INPUT_NATIVE_EXPORT void remote_input_activity_stop(void);
 
-// Local input events seen since the DLL loaded: every key and button event
-// and wheel notch not tagged by this process, every burst of untagged
-// pointer movement past 4 pixels of travel (see MouseHook in the .cpp), and
-// every stall of the hook thread that hid input from the hooks. Only grows.
+// Local input events seen since the DLL loaded: every physical (not
+// injected, by any process) key and button event and wheel notch, every
+// burst of physical pointer movement past 4 pixels of travel (see MouseHook
+// in the .cpp), and every stall of the hook thread that hid input from the
+// hooks. Only grows.
 REMOTE_INPUT_NATIVE_EXPORT uint64_t remote_input_activity_count(void);
 
 // 1 while the hook thread runs with both hooks installed by its last
@@ -61,8 +64,8 @@ REMOTE_INPUT_NATIVE_EXPORT int32_t remote_input_activity_hooks_installed(void);
 //
 // - MISSED: a stall of the hook thread during which Windows recorded input
 //   the hooks never saw.
-// - KEY, BUTTON (buttons and wheel notches), MOVE (a burst of untagged
-//   movement past the threshold): input the package didn't inject.
+// - KEY, BUTTON (buttons and wheel notches), MOVE (a burst of physical
+//   movement past the threshold): input no software injected.
 // - STALL: every heartbeat gap over 200 ms, whether or not it hid input.
 //   Not counted as local input itself: MISSED is.
 #define REMOTE_INPUT_REASON_MISSED 0
@@ -89,7 +92,7 @@ REMOTE_INPUT_NATIVE_EXPORT uint64_t remote_input_activity_longest_gap(void);
 REMOTE_INPUT_NATIVE_EXPORT uint64_t
 remote_input_activity_move_origin_count(int32_t index);
 
-// The longest single untagged pointer move the hooks saw since the DLL
+// The longest single physical pointer move the hooks saw since the DLL
 // loaded, in whole pixels: a distance, never a position.
 REMOTE_INPUT_NATIVE_EXPORT uint64_t remote_input_activity_largest_step(void);
 

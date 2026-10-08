@@ -7,12 +7,12 @@ import 'win32_api.dart';
 /// The Windows [LocalActivityMonitor] (`docs/design.md` §6.3).
 ///
 /// The plugin's native code runs `WH_MOUSE_LL` and `WH_KEYBOARD_LL` hooks
-/// on a thread of its own with a message loop, and counts every key, button
-/// and wheel event that doesn't carry the package's tag (physical input,
-/// and input injected by other software), every burst of untagged pointer
-/// movement past 4 pixels of travel, measured apart from the package's own
-/// moves, and every stall of the hook thread that hid input from the hooks
-/// (a stall alone doesn't count: RIN-39). This side polls the counter
+/// on a thread of its own with a message loop, and counts physical input
+/// only: every key, button and wheel event Windows doesn't flag as
+/// injected (by any process, with any tag), every burst of physical pointer
+/// movement past 4 pixels of travel, measured apart from injected moves,
+/// and every stall of the hook thread that hid input from the hooks (a
+/// stall alone doesn't count). Both rules are from RIN-39. This side polls the counter
 /// every [pollInterval] while [activity] has a listener, and emits when it
 /// changes, so a session pauses within about one poll of the first local
 /// event (the target is 50 ms).
@@ -153,7 +153,7 @@ final class WindowsLocalActivity
       for (var i = 0; i < 8; i++)
         '${i < 4 ? 'physical' : 'injected'}Move.${tags[i % 4]}': _native
             .moveOriginCount(i),
-      'largestUntaggedStepPx': _native.largestUntaggedStepPx(),
+      'largestPhysicalStepPx': _native.largestPhysicalStepPx(),
     }..removeWhere((_, v) => v == 0);
     return LocalInputCounts(
       counted: Map.unmodifiable(counted),

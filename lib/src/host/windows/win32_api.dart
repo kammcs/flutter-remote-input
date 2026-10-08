@@ -164,8 +164,8 @@ abstract interface class NativeActivity {
   /// process, 3 for any other. For diagnostics.
   int moveOriginCount(int index);
 
-  /// The longest single untagged move so far, in whole pixels.
-  int largestUntaggedStepPx();
+  /// The longest single physical move so far, in whole pixels.
+  int largestPhysicalStepPx();
 }
 
 /// The native counter's reasons, in `REMOTE_INPUT_REASON_*` order
@@ -174,13 +174,13 @@ enum NativeActivityReason {
   /// A stall that hid input from the hooks.
   missed,
 
-  /// An untagged key.
+  /// A physical key: not injected, by any process.
   key,
 
-  /// An untagged button or wheel notch.
+  /// A physical button or wheel notch.
   button,
 
-  /// A burst of untagged movement past the threshold.
+  /// A burst of physical movement past the threshold.
   move,
 
   /// Any stall of the hook thread, counted as local input or not.

@@ -247,7 +247,7 @@ final class FakeNativeActivity implements NativeActivity {
   int moveOriginCount(int index) => moveOrigins[index] ?? 0;
 
   @override
-  int largestUntaggedStepPx() => largestStep;
+  int largestPhysicalStepPx() => largestStep;
 }
 
 /// Decodes an array of `INPUT` records, as Windows would read it.

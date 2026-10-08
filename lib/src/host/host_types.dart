@@ -88,14 +88,14 @@ enum ViolationKind {
 /// What the host's local-input monitor counted as local input
 /// (`docs/design.md` §6.3). Counted in `LocalInputCounts.counted`.
 enum LocalInputSource {
-  /// A key the package didn't inject.
+  /// A key from a device, not injected.
   key,
 
-  /// A mouse button or wheel notch the package didn't inject.
+  /// A mouse button or wheel notch from a device, not injected.
   button,
 
-  /// A burst of pointer movement past the platform's threshold that the
-  /// package didn't inject.
+  /// A burst of pointer movement from a device past the platform's
+  /// threshold.
   move,
 
   /// A stall of the monitor during which the OS recorded input the monitor
@@ -134,7 +134,7 @@ final class LocalInputCounts {
   /// Platform-specific counters for diagnosing what counted, by name. Not
   /// a stable API: names may change between versions. On Windows, mouse
   /// moves by origin (`injectedMove.ours`, `physicalMove.noTag`, ...: the
-  /// injected flag, then the event's tag) and `largestUntaggedStepPx`, a
+  /// injected flag, then the event's tag) and `largestPhysicalStepPx`, a
   /// distance. Counts and distances only, never positions.
   final Map<String, int> details;
 
