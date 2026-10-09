@@ -159,7 +159,7 @@ The Windows and macOS hosts are built and unit-tested; these are the checks that
 
 ### C1. Windows
 
-Built and unit-tested on macOS; the native C++ was compile-checked with mingw-w64. Nothing here has run on Windows yet. Run on a Windows machine with the example built from this repo.
+Built and unit-tested on macOS; the native C++ is compile-checked with mingw-w64 there, then built with MSVC on Windows. First runs on 2026-10-08 (see Results): the MSVC build and the gtests, and local input wins during sustained control. Run on a Windows machine with the example built from this repo.
 
 1. Build the example. Run `remote_input_test.exe` (gtest), then, with the machine idle, `flutter test integration_test/windows_injection_test.dart -d windows`.
 2. Coordinates (design §3.2, open question 3): every corner and the centre land exactly, by Flutter's position and by `GetCursorPos`, in both placements (absolute and the `SetCursorPos` fallback). Repeat on a mixed-DPI rig (100 % and 150 %) with a monitor left of or above the primary.
@@ -206,6 +206,9 @@ Fill in one row per run. Result: pass, fail, or n/a with a reason.
 
 | Check | Viewer → host | Commit | Date | Network | Result | Notes |
 |---|---|---|---|---|---|---|
+| C1.1 Build and gtests | Windows (MSVC) | `56aea67` | 2026-10-08 | — | pass | 11 of 12 gtests; `InjectedMoveWithForeignTagIsNotLocalInput` not run (it injects into the live desktop) |
+| C1.4 Local input wins | macOS → Windows | `5be8ca6`, `979dbe2` | 2026-10-08 | the first consumer's call (SFU DataChannels) | fail | Paused within about 0.25 s every time: each injected mouse move reached the hook flagged as injected but without the package's tag. Fixed in RIN-39 |
+| C1.4 Local input wins | macOS → Windows | `56aea67` | 2026-10-08 | the first consumer's call (SFU DataChannels) | pass | About 2 minutes of moves and typing, 1,863 events injected, no pause; a physical move paused control at once (not timed: B5). One 3440×1440 display at 100 % |
 | A1 Pointer | Windows → macOS | | | | | |
 | A1 Pointer | macOS → Windows | | | | | |
 | A2 Keys | Windows → macOS | | | | | |

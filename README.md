@@ -4,7 +4,7 @@ Remote keyboard and mouse control for Flutter apps. A **viewer** watching someon
 
 **Any device can be the viewer:** a phone, a tablet, a browser or a desktop. **Windows and macOS desktops can be controlled.**
 
-> **Pre-release, feature complete in code, not yet checked on devices.** Everything in the design is built and unit-tested: the protocol, the safety core, injection on Windows and macOS, the capture widget and the example. Nothing has injected on a real Windows or macOS machine yet, and the viewer's keyboard handling hasn't been tried on real browsers and phones; [docs/checkpoint.md](docs/checkpoint.md) lists those checks. The package isn't on pub.dev (`publish_to: none`), and the API may still change.
+> **Pre-release, feature complete in code, device checks under way.** Everything in the design is built and unit-tested: the protocol, the safety core, injection on Windows and macOS, the capture widget and the example. A Windows host has been controlled from a Mac viewer on a real machine, with local input wins working; nothing has run with a Mac as host yet, and the viewer's keyboard handling hasn't been tried on real browsers and phones. [docs/checkpoint.md](docs/checkpoint.md) lists the checks and their results. The package isn't on pub.dev (`publish_to: none`), and the API may still change.
 
 > **CI is off for now.** The workflow is kept in `.github/workflows/`, but GitHub Actions is disabled on this repository. `dart format`, `flutter analyze`, `flutter test` and gitleaks run locally before each push.
 
