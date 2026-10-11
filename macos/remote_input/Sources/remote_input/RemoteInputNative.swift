@@ -631,10 +631,11 @@ public func remote_input_session_state() -> Int32 {
   return 0
 }
 
-/// Writes a snapshot for the local-activity monitor to [out], 12 doubles:
+/// Writes a snapshot for the local-activity monitor to [out], 13 doubles:
 /// the HID system's counts of key downs, flag changes (modifier keys),
 /// button downs, scrolls and moves (with drags); the pointer's x and y;
-/// then the same five counts for events this package posted.
+/// the same five counts for events this package posted; then 1 if the
+/// pointer's location was read, 0 if not (its x and y are 0 then; RIN-45).
 ///
 /// The HID system state table "reflects the combined state of all hardware
 /// event sources posting from the HID system" (`CGEventSource.h`), and the
@@ -653,12 +654,13 @@ public func remote_input_activity_snapshot(_ out: UnsafeMutablePointer<Double>?)
   out[3] = Double(hid(.scrollWheel))
   out[4] = Double(
     hid(.mouseMoved) &+ hid(.leftMouseDragged) &+ hid(.rightMouseDragged) &+ hid(.otherMouseDragged))
-  let location = CGEvent(source: nil)?.location ?? .zero
-  out[5] = Double(location.x)
-  out[6] = Double(location.y)
+  let location = CGEvent(source: nil)?.location
+  out[5] = Double(location?.x ?? 0)
+  out[6] = Double(location?.y ?? 0)
   for (i, value) in RemoteInputNative.shared.ownCounts().enumerated() {
     out[7 + i] = Double(value)
   }
+  out[12] = location == nil ? 0 : 1
 }
 
 /// Keyboards and pointing devices removed since the device watch armed (the

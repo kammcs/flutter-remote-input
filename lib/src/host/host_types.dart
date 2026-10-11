@@ -136,8 +136,10 @@ final class LocalInputCounts {
   /// moves by origin (`injectedMove.ours`, `physicalMove.noTag`, ...: the
   /// injected flag, then the event's tag), `largestPhysicalStepPx`, a
   /// distance, and `devicesLost` and `inputDevices`, keyboards and mice
-  /// removed so far and present at the last read (RIN-41). Counts and
-  /// distances only, never positions.
+  /// removed so far and present at the last read (RIN-41). On macOS
+  /// (RIN-45), `staleCounterTrips` (times the HID counters were judged
+  /// frozen), `unexplainedPointerMoves`, `pointerUnreadablePolls` and
+  /// `devicesLost`. Counts and distances only, never positions.
   final Map<String, int> details;
 
   /// All local input.

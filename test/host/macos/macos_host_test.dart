@@ -618,7 +618,7 @@ void main() {
         async.elapse(const Duration(milliseconds: 100));
         expect(native.snapshots, greaterThanOrEqualTo(10));
         expect(events, 0);
-        native.hid = const MacosActivityCounts(keyDowns: 1);
+        native.bumpHid(keyDowns: 1);
         async.elapse(const Duration(milliseconds: 10));
         expect(events, 1);
         sub.cancel();
@@ -675,14 +675,14 @@ void main() {
         final sub = monitor.activity.listen((_) => local++);
         async.elapse(const Duration(milliseconds: 20));
         expect(monitor.checkNow(), isFalse);
-        native.hid = const MacosActivityCounts(buttonDowns: 1);
+        native.bumpHid(buttonDowns: 1);
         expect(monitor.checkNow(), isTrue);
         expect(monitor.checkNow(), isFalse);
         // Consumed: the poll doesn't report it again.
         async.elapse(const Duration(milliseconds: 20));
         expect(local, 0);
         // Movement is the poll's.
-        native.hid = const MacosActivityCounts(buttonDowns: 1, moves: 9);
+        native.bumpHid(moves: 9);
         native.cursor = const Offset(300, 300);
         expect(monitor.checkNow(), isFalse);
         native.lost += 1;
@@ -692,6 +692,128 @@ void main() {
         async.elapse(const Duration(milliseconds: 20));
         expect(lost, 1);
         sub.cancel();
+      });
+    });
+
+    group('health (RIN-45)', () {
+      const poll = Duration(milliseconds: 10);
+
+      test('healthy with live counters and a readable pointer', () {
+        fakeAsync((async) {
+          final monitor = MacosLocalActivity(native);
+          expect(monitor.isMonitoring, isFalse); // not polling yet
+          final sub = monitor.activity.listen((_) {});
+          expect(monitor.isMonitoring, isTrue);
+          // Physical movement the counters see.
+          for (var i = 1; i <= 20; i++) {
+            native
+              ..cursor = Offset(i * 30.0, 0)
+              ..bumpHid(moves: 3);
+            async.elapse(poll);
+          }
+          expect(monitor.isMonitoring, isTrue);
+          sub.cancel();
+        });
+      });
+
+      test('counters that read all zero are not monitoring', () {
+        fakeAsync((async) {
+          native.hid = const MacosActivityCounts();
+          final monitor = MacosLocalActivity(native);
+          final sub = monitor.activity.listen((_) {});
+          async.elapse(poll * 3);
+          expect(monitor.isMonitoring, isFalse);
+          native.bumpHid(keyDowns: 1);
+          async.elapse(poll);
+          expect(monitor.isMonitoring, isTrue);
+          sub.cancel();
+        });
+      });
+
+      test('the pointer moving while the HID counter is flat fails closed, '
+          'and a physical move recovers', () {
+        fakeAsync((async) {
+          final monitor = MacosLocalActivity(native);
+          var local = 0;
+          final sub = monitor.activity.listen((_) => local++);
+          async.elapse(poll);
+          native.cursor = const Offset(200, 0);
+          async.elapse(poll);
+          expect(monitor.isMonitoring, isTrue); // one sample could be a race
+          native.cursor = const Offset(400, 0);
+          async.elapse(poll);
+          expect(monitor.isMonitoring, isFalse);
+          expect(monitor.checkNow(), isFalse);
+          async.elapse(poll * 10);
+          expect(monitor.isMonitoring, isFalse);
+          // The counters see the hardware again.
+          native
+            ..cursor = const Offset(420, 0)
+            ..bumpHid(moves: 3);
+          async.elapse(poll);
+          expect(monitor.isMonitoring, isTrue);
+          expect(local, 1); // input in the gap went unseen
+          final counts = monitor.localInputCounts;
+          expect(counts.counted, {LocalInputSource.monitorGap: 1});
+          expect(counts.details['staleCounterTrips'], 1);
+          expect(counts.details['unexplainedPointerMoves'], 2);
+          sub.cancel();
+        });
+      });
+
+      test('the package\'s own moves don\'t trip it', () {
+        fakeAsync((async) {
+          final platform = MacosHostPlatform(native);
+          final monitor = platform.localActivity;
+          final sub = monitor.activity.listen((_) {});
+          for (var i = 1; i <= 50; i++) {
+            platform.injector.movePointer(
+              Offset((i * 37 % 1000).toDouble(), (i * 53 % 700).toDouble()),
+              heldButtons: const {},
+            );
+            async.elapse(poll);
+          }
+          expect(monitor.isMonitoring, isTrue);
+          expect(monitor.localInputCounts.details, isEmpty);
+          sub.cancel();
+        });
+      });
+
+      test(
+        'a display reconfiguration jumping the pointer doesn\'t trip it',
+        () {
+          fakeAsync((async) {
+            final monitor = MacosLocalActivity(native);
+            final sub = monitor.activity.listen((_) {});
+            async.elapse(poll);
+            native.generation++;
+            async.elapse(poll);
+            native.cursor = const Offset(1500, 300);
+            async.elapse(poll);
+            native.cursor = const Offset(800, 300);
+            async.elapse(poll);
+            expect(monitor.isMonitoring, isTrue);
+            sub.cancel();
+          });
+        },
+      );
+
+      test('an unreadable pointer is not monitoring until it reads again', () {
+        fakeAsync((async) {
+          final monitor = MacosLocalActivity(native);
+          var local = 0;
+          final sub = monitor.activity.listen((_) => local++);
+          async.elapse(poll);
+          native.cursor = null;
+          async.elapse(poll);
+          expect(monitor.isMonitoring, isFalse);
+          native.cursor = const Offset(10, 10);
+          async.elapse(poll);
+          expect(monitor.isMonitoring, isTrue);
+          expect(local, 1);
+          expect(monitor.localInputCounts.details['pointerUnreadablePolls'], 1);
+          sub.cancel();
+        });
       });
     });
 
@@ -707,7 +829,7 @@ void main() {
         );
         // Even if the HID system reported a move, the pointer is where the
         // package put it.
-        native.hid = const MacosActivityCounts(moves: 1);
+        native.bumpHid(moves: 1);
         async.elapse(const Duration(milliseconds: 20));
         expect(events, 0);
       });
@@ -765,9 +887,34 @@ void main() {
         RemoteInputViewer(link: pair.viewer);
         async.elapse(const Duration(milliseconds: 20));
         expect(session.state, const SessionActive());
-        native.hid = const MacosActivityCounts(buttonDowns: 1);
+        native.bumpHid(buttonDowns: 1);
         async.elapse(const Duration(milliseconds: 10));
         expect(session.state, const SessionPaused(PauseReason.localInput));
+        session.stop();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('frozen HID counters block the session (RIN-45)', () {
+      fakeAsync((async) {
+        final pair = MemoryInputLink.pair();
+        final session = RemoteInputHost(platform: MacosHostPlatform(native))
+            .enable(link: pair.host, surface: const SharedSurface.display(1));
+        final viewer = RemoteInputViewer(link: pair.viewer);
+        async.elapse(const Duration(milliseconds: 20));
+        expect(session.state, const SessionActive());
+        // The pointer moves twice with no HID move and no post.
+        native.cursor = const Offset(300, 300);
+        async.elapse(const Duration(milliseconds: 10));
+        native.cursor = const Offset(600, 300);
+        async.elapse(const Duration(milliseconds: 10));
+        viewer.key(usageA, KeyAction.down);
+        async.elapse(const Duration(milliseconds: 10));
+        expect(native.keys, isEmpty);
+        expect(
+          session.state,
+          const SessionBlocked(BlockReason.localInputUnmonitored),
+        );
         session.stop();
         async.flushMicrotasks();
       });
@@ -782,7 +929,7 @@ void main() {
         async.elapse(const Duration(milliseconds: 20));
         expect(session.state, const SessionActive());
         // The presenter types; the viewer's key arrives before the next poll.
-        native.hid = const MacosActivityCounts(keyDowns: 1);
+        native.bumpHid(keyDowns: 1);
         viewer.key(usageA, KeyAction.down);
         async.flushMicrotasks();
         expect(native.keys, isEmpty);
@@ -844,7 +991,7 @@ void main() {
             viewer.pointerMove(Offset(0.3 + (t % 400) / 1000, 0.5));
             // 125 Hz from the host's mouse.
             if (mouse && t % 8 == 0) {
-              native.hid = MacosActivityCounts(moves: native.hid.moves + 1);
+              native.bumpHid(moves: 1);
             }
             async.elapse(const Duration(milliseconds: 4));
           }

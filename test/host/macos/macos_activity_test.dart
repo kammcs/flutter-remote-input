@@ -369,4 +369,120 @@ void main() {
     d.reset();
     expect(d.update(snap(keys: 5), ms(10)), isFalse);
   });
+
+  group('MacosCounterHealth (RIN-45)', () {
+    late MacosCounterHealth h;
+    setUp(() => h = MacosCounterHealth());
+
+    // The pointer at [x], with the HID move counter at [moves] and the
+    // package's own move counter at [own].
+    MacosActivitySnapshot at(double x, {int moves = 100, int own = 0}) => snap(
+      moves: moves,
+      pointer: Offset(x, 0),
+      own: MacosActivityCounts(moves: own),
+    );
+
+    test('physical moves the counters see are healthy', () {
+      h.update(at(0), 0, ms(0));
+      for (var i = 1; i <= 50; i++) {
+        h.update(at(i * 20.0, moves: 100 + i * 3), 0, ms(i * 10));
+      }
+      expect(h.countersStale, isFalse);
+      expect(h.unexplainedMoves, 0);
+    });
+
+    test('the pointer moving with the counter flat, twice, is stale', () {
+      h.update(at(0), 0, ms(0));
+      h.update(at(50), 0, ms(10));
+      expect(h.countersStale, isFalse); // one sample could be a race
+      h.update(at(100), 0, ms(20));
+      expect(h.countersStale, isTrue);
+      expect(h.trips, 1);
+      // It stays stale while the counter is flat, moving or not.
+      h.update(at(100), 0, ms(30));
+      h.update(at(150), 0, ms(40));
+      expect(h.countersStale, isTrue);
+      expect(h.trips, 1);
+      // Recovery: the counter advances with a physical move.
+      expect(h.update(at(160, moves: 103), 0, ms(50)), isTrue);
+      expect(h.countersStale, isFalse);
+      expect(h.update(at(170, moves: 106), 0, ms(60)), isFalse);
+    });
+
+    test('strikes must fall within the window, with no HID move between', () {
+      h.update(at(0), 0, ms(0));
+      h.update(at(50), 0, ms(10));
+      h.update(at(100), 0, ms(1500));
+      expect(h.countersStale, isFalse);
+      h.update(at(150), 0, ms(1510));
+      expect(h.countersStale, isTrue);
+
+      h = MacosCounterHealth()..update(at(0), 0, ms(0));
+      h.update(at(50), 0, ms(10));
+      h.update(at(60, moves: 101), 0, ms(20)); // the counter moved
+      h.update(at(110, moves: 101), 0, ms(30));
+      expect(h.countersStale, isFalse);
+    });
+
+    test('movement within the threshold is ignored', () {
+      h.update(at(0), 0, ms(0));
+      for (var i = 1; i <= 20; i++) {
+        h.update(at(i.isEven ? 0 : 3), 0, ms(i * 10));
+      }
+      expect(h.countersStale, isFalse);
+      expect(h.unexplainedMoves, 0);
+    });
+
+    test('the package\'s own moves are explained', () {
+      h.update(at(0), 0, ms(0));
+      // Its own counter advanced in the same poll.
+      for (var i = 1; i <= 10; i++) {
+        h.update(at(i * 100.0, own: i), 0, ms(i * 10));
+      }
+      expect(h.countersStale, isFalse);
+      // Its post was counted a poll before the pointer got there.
+      h
+        ..noteInjectedPointer(const Offset(2000, 0))
+        ..update(at(2000.5, own: 10), 0, ms(200))
+        ..noteInjectedPointer(const Offset(3000, 0))
+        ..update(at(3001, own: 10), 0, ms(210));
+      expect(h.countersStale, isFalse);
+      expect(h.unexplainedMoves, 0);
+      // Anywhere else isn't.
+      h
+        ..update(at(3500, own: 10), 0, ms(220))
+        ..update(at(4000, own: 10), 0, ms(230));
+      expect(h.countersStale, isTrue);
+    });
+
+    test('a display reconfiguration explains jumps for a while', () {
+      h.update(at(0), 0, ms(0));
+      h.update(at(0), 1, ms(10)); // reconfigured
+      h.update(at(900), 1, ms(20)); // the pointer lands on another display
+      h.update(at(1800), 1, ms(30));
+      expect(h.countersStale, isFalse);
+      // After the grace, jumps count again.
+      h.update(at(1900), 1, ms(600));
+      h.update(at(2000), 1, ms(610));
+      expect(h.countersStale, isTrue);
+    });
+
+    test('an unreadable pointer resets the baseline, without a strike', () {
+      h.update(at(0), 0, ms(0));
+      h.update(at(50), 0, ms(10));
+      h.update(
+        const MacosActivitySnapshot(
+          hid: MacosActivityCounts(moves: 100),
+          own: MacosActivityCounts(),
+          pointer: Offset.zero,
+          pointerReadable: false,
+        ),
+        0,
+        ms(20),
+      );
+      h.update(at(500), 0, ms(30)); // a new baseline
+      expect(h.countersStale, isFalse);
+      expect(h.unexplainedMoves, 1);
+    });
+  });
 }

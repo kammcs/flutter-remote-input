@@ -121,6 +121,7 @@ final class MacosActivitySnapshot {
     required this.hid,
     required this.own,
     required this.pointer,
+    this.pointerReadable = true,
   });
 
   /// The HID system's counts (`kCGEventSourceStateHIDSystemState`):
@@ -130,8 +131,13 @@ final class MacosActivitySnapshot {
   /// The counts of events this package posted.
   final MacosActivityCounts own;
 
-  /// Where the pointer is, in global display points.
+  /// Where the pointer is, in global display points. [Offset.zero] when
+  /// not [pointerReadable].
   final Offset pointer;
+
+  /// Whether the pointer's location could be read (RIN-45). Without it,
+  /// movement by distance can't be judged.
+  final bool pointerReadable;
 }
 
 /// The native calls the macOS host makes. All are synchronous.

@@ -127,7 +127,8 @@ class _MacosCheckPageState extends State<MacosCheckPage> {
         final stats = session.stats;
         _say(
           '$name: injected ${stats.injected}, dropped '
-          '${{for (final e in stats.dropped.entries) e.key.name: e.value}}',
+          '${{for (final e in stats.dropped.entries) e.key.name: e.value}}'
+          '${stats.localInput == null ? '' : ', ${stats.localInput}'}',
         );
         session.stop();
         await viewer.close();

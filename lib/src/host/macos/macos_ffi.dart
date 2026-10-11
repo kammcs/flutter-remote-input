@@ -312,6 +312,7 @@ final class FfiMacosNative implements MacosNative {
         scrolls: b[10].toInt(),
         moves: b[11].toInt(),
       ),
+      pointerReadable: b[12] != 0,
     );
   }
 }

@@ -65,7 +65,31 @@ final class FakeMacosNative implements MacosNative {
   bool secure = false;
   int session = MacosSessionState.active;
   int sessionReads = 0;
-  MacosActivityCounts hid = const MacosActivityCounts();
+
+  /// The HID system's counts. Non-zero, as on a Mac that has seen input
+  /// since boot: all zeros makes the monitor unhealthy (RIN-45).
+  MacosActivityCounts hid = const MacosActivityCounts(
+    keyDowns: 500,
+    flagsChanged: 80,
+    buttonDowns: 300,
+    scrolls: 40,
+    moves: 9000,
+  );
+
+  /// Advances the HID system's counts, as hardware input does.
+  void bumpHid({
+    int keyDowns = 0,
+    int flagsChanged = 0,
+    int buttonDowns = 0,
+    int scrolls = 0,
+    int moves = 0,
+  }) => hid = MacosActivityCounts(
+    keyDowns: hid.keyDowns + keyDowns,
+    flagsChanged: hid.flagsChanged + flagsChanged,
+    buttonDowns: hid.buttonDowns + buttonDowns,
+    scrolls: hid.scrolls + scrolls,
+    moves: hid.moves + moves,
+  );
   MacosActivityCounts own = const MacosActivityCounts();
   int snapshots = 0;
 
@@ -187,6 +211,7 @@ final class FakeMacosNative implements MacosNative {
       hid: hid,
       own: own,
       pointer: cursor ?? Offset.zero,
+      pointerReadable: cursor != null,
     );
   }
 }
