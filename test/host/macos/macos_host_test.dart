@@ -665,6 +665,36 @@ void main() {
       });
     });
 
+    test('checkNow reads the counters between polls (RIN-42)', () {
+      fakeAsync((async) {
+        final monitor = MacosLocalActivity(native);
+        expect(monitor.checkNow(), isFalse); // not monitoring
+        var local = 0;
+        var lost = 0;
+        monitor.devicesLost.listen((_) => lost++);
+        final sub = monitor.activity.listen((_) => local++);
+        async.elapse(const Duration(milliseconds: 20));
+        expect(monitor.checkNow(), isFalse);
+        native.hid = const MacosActivityCounts(buttonDowns: 1);
+        expect(monitor.checkNow(), isTrue);
+        expect(monitor.checkNow(), isFalse);
+        // Consumed: the poll doesn't report it again.
+        async.elapse(const Duration(milliseconds: 20));
+        expect(local, 0);
+        // Movement is the poll's.
+        native.hid = const MacosActivityCounts(buttonDowns: 1, moves: 9);
+        native.cursor = const Offset(300, 300);
+        expect(monitor.checkNow(), isFalse);
+        native.lost += 1;
+        expect(monitor.checkNow(), isTrue);
+        async.flushMicrotasks();
+        expect(lost, 1);
+        async.elapse(const Duration(milliseconds: 20));
+        expect(lost, 1);
+        sub.cancel();
+      });
+    });
+
     test('injected moves are not local input', () {
       fakeAsync((async) {
         final platform = MacosHostPlatform(native);
@@ -737,6 +767,25 @@ void main() {
         expect(session.state, const SessionActive());
         native.hid = const MacosActivityCounts(buttonDowns: 1);
         async.elapse(const Duration(milliseconds: 10));
+        expect(session.state, const SessionPaused(PauseReason.localInput));
+        session.stop();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('a key typed between polls drops the next event (RIN-42)', () {
+      fakeAsync((async) {
+        final pair = MemoryInputLink.pair();
+        final session = RemoteInputHost(platform: MacosHostPlatform(native))
+            .enable(link: pair.host, surface: const SharedSurface.display(1));
+        final viewer = RemoteInputViewer(link: pair.viewer);
+        async.elapse(const Duration(milliseconds: 20));
+        expect(session.state, const SessionActive());
+        // The presenter types; the viewer's key arrives before the next poll.
+        native.hid = const MacosActivityCounts(keyDowns: 1);
+        viewer.key(usageA, KeyAction.down);
+        async.flushMicrotasks();
+        expect(native.keys, isEmpty);
         expect(session.state, const SessionPaused(PauseReason.localInput));
         session.stop();
         async.flushMicrotasks();

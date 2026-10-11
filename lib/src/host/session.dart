@@ -776,6 +776,7 @@ final class ControlSession {
         down: m.down,
         clickCount: max(1, m.clickCount),
       ),
+      release: !m.down,
     );
     if (m.down) {
       if (r == InjectResult.injected) _heldButtons.add(m.button);
@@ -917,8 +918,13 @@ final class ControlSession {
   }
 
   /// Calls the injector, unless the session has stopped: the stop flag is
-  /// checked immediately before every OS call (`docs/design.md` §6.2).
-  InjectResult? _inject(InputKind kind, InjectResult Function() call) {
+  /// checked immediately before every OS call (`docs/design.md` §6.2). So
+  /// is local input, unless [release] (RIN-42).
+  InjectResult? _inject(
+    InputKind kind,
+    InjectResult Function() call, {
+    bool release = false,
+  }) {
     if (_stopped) return null;
     final expiresAt = options.expiresAt;
     if (expiresAt != null && !clock.now().isBefore(expiresAt)) {
@@ -926,6 +932,7 @@ final class ControlSession {
       _stop(StopReason.expired);
       return null;
     }
+    if (!release && _localInputNow()) return null;
     final r = call();
     switch (r) {
       case InjectResult.injected:
@@ -942,6 +949,23 @@ final class ControlSession {
         _drop(DropReason.failed);
     }
     return r;
+  }
+
+  /// Asks the monitor, synchronously, whether there was local input since
+  /// its last read (RIN-42, `docs/design.md` §6.3). If so, the event about
+  /// to be injected is dropped and the session pauses as it would at the
+  /// next poll. Releases don't come here: they always go through.
+  bool _localInputNow() {
+    final local = switch (_platform.localActivity) {
+      final LocalActivityCheck check => check.checkNow(),
+      _ => false,
+    };
+    if (!local) return false;
+    _drop(DropReason.inactive);
+    // A lost device stops the session when its event arrives; local input
+    // already counts until then.
+    if (!_stopped) _onLocalActivity();
+    return true;
   }
 
   // --- Surfaces and checks --------------------------------------------------

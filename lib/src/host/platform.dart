@@ -131,6 +131,28 @@ abstract interface class LocalActivityMonitor {
   bool get isMonitoring;
 }
 
+/// A [LocalActivityMonitor] that can be asked, synchronously, whether there
+/// was local input just now (`docs/design.md` §6.3, RIN-42). A separate
+/// interface, so monitors without it still implement [LocalActivityMonitor]
+/// alone.
+///
+/// The session calls [checkNow] immediately before every OS call that
+/// injects (releases excepted). The poll behind
+/// [LocalActivityMonitor.activity] only runs between events, so without it
+/// a queued burst of keys, text or wheel events, or a UI isolate running
+/// late, could land after the presenter took over.
+abstract interface class LocalActivityCheck {
+  /// Reads the platform's counters now and returns whether there was local
+  /// input since the last read, by this call or the monitor's poll. What
+  /// it finds is consumed: [LocalActivityMonitor.activity] doesn't report
+  /// it again. A removed device it finds is reported on
+  /// [LocalDeviceMonitor.devicesLost] too, and counts as local input.
+  ///
+  /// Called before every injected event, so it must cost microseconds and
+  /// never block. False while the monitor isn't monitoring.
+  bool checkNow();
+}
+
 /// A [LocalActivityMonitor] that also sees the host's keyboards and
 /// pointing devices go away (`docs/design.md` §6.3, RIN-41). A separate
 /// interface, so monitors without it still implement [LocalActivityMonitor]

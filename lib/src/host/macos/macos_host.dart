@@ -489,8 +489,13 @@ final class MacosSecureContext implements SecureContextProbe {
 /// notifications, no permission), and emits on [devicesLost] when it grew.
 /// If the watch couldn't arm, [isMonitoring] is false: no injection without
 /// it.
+///
+/// **Checked before each event (RIN-42).** [checkNow] reads the device
+/// count and a snapshot, and counts a hardware key, modifier, button or
+/// scroll since the last read. Movement is left to the poll, whose rules
+/// need its timing ([MacosActivityDetector.checkDiscrete]).
 final class MacosLocalActivity
-    implements LocalActivityMonitor, LocalDeviceMonitor {
+    implements LocalActivityMonitor, LocalDeviceMonitor, LocalActivityCheck {
   /// Creates a monitor over [native], polling every [pollInterval] (10 ms,
   /// for a pause within the 100 ms target).
   MacosLocalActivity(
@@ -548,15 +553,32 @@ final class MacosLocalActivity
     _detector.reset();
   }
 
-  void _poll() {
-    final watch = _watch;
-    if (watch == null) return;
+  /// Reads the device count and the counters now (RIN-42). A removed device
+  /// or a hardware key, modifier, button or scroll since the last read
+  /// counts, and is consumed.
+  @override
+  bool checkNow() {
+    if (!isMonitoring) return false;
+    if (_readDevices()) return true;
+    return _detector.checkDiscrete(_native.activitySnapshot());
+  }
+
+  /// Reads the device watch's count, and emits on [devicesLost] if it grew.
+  /// Returns whether it did.
+  bool _readDevices() {
     final lost = _native.devicesLost();
     final deviceLost = lost >= 0 && _devicesLost >= 0 && lost != _devicesLost;
     _devicesLost = lost;
+    if (deviceLost) _devices.add(null);
+    return deviceLost;
+  }
+
+  void _poll() {
+    final watch = _watch;
+    if (watch == null) return;
+    _readDevices();
     if (_detector.update(_native.activitySnapshot(), watch.elapsed)) {
       _controller.add(null);
     }
-    if (deviceLost) _devices.add(null);
   }
 }

@@ -831,6 +831,49 @@ void main() {
       });
     });
 
+    test('local input between polls drops the next event (RIN-42)', () {
+      fakeAsync((async) {
+        final rig = Rig(async);
+        // A burst of keys and text queued behind the rate limit, then the
+        // presenter types before the poll runs.
+        rig.viewer.key(usageA, KeyAction.down);
+        rig.flush();
+        expect(rig.events, [const InjectedKey(usageA, down: true)]);
+        rig.platform.localActivity.simulateUnpolledInput();
+        rig.viewer.key(usageB, KeyAction.down);
+        rig.viewer.text('hello');
+        rig.flush();
+        expect(rig.session.state, const SessionPaused(PauseReason.localInput));
+        // B never went down; A was released by the pause.
+        expect(rig.events, [
+          const InjectedKey(usageA, down: true),
+          const InjectedKey(usageA, down: false),
+        ]);
+        expect(rig.dropped(DropReason.inactive), greaterThanOrEqualTo(1));
+        // It resumes like any local-input pause.
+        rig.elapse(const HostOptions().localIdle * 2);
+        expect(rig.session.state, const SessionActive());
+      });
+    });
+
+    test('every injected event is checked; releases are not', () {
+      fakeAsync((async) {
+        final rig = Rig(async);
+        final local = rig.platform.localActivity;
+        rig.viewer.button(100, 100, PointerButton.left, down: true);
+        rig.flush();
+        final afterDown = local.checks;
+        expect(afterDown, greaterThanOrEqualTo(1));
+        rig.viewer.button(100, 100, PointerButton.left, down: false);
+        rig.flush();
+        expect(local.checks, afterDown);
+        rig.viewer.key(usageA, KeyAction.down);
+        rig.viewer.key(usageA, KeyAction.up);
+        rig.flush();
+        expect(local.checks, afterDown + 1);
+      });
+    });
+
     test('a lost keyboard or mouse stops the session (RIN-41)', () {
       fakeAsync((async) {
         final rig = Rig(async);

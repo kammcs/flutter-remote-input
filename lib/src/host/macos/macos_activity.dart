@@ -165,6 +165,35 @@ final class MacosActivityDetector {
     return false;
   }
 
+  /// Whether [snapshot], read between polls, shows a hardware key down, a
+  /// modifier change, a button down or a scroll since the last snapshot
+  /// (RIN-42). Those are local input on their own, so they're checked
+  /// before every injected event. If there is one, it's consumed: those
+  /// counts in the baseline move on, and the movement state is kept, so
+  /// movement is still judged by [update] at the poll's cadence. False
+  /// before the first snapshot, and with [ownEventsReachHidState], whose
+  /// subtraction needs the poll's timing.
+  bool checkDiscrete(MacosActivitySnapshot snapshot) {
+    final last = _last;
+    if (last == null || ownEventsReachHidState) return false;
+    final hid = _deltas(snapshot.hid, last.hid);
+    if (hid[0] + hid[1] + hid[2] + hid[3] == 0) return false;
+    MacosActivityCounts keepMoves(MacosActivityCounts now, int moves) =>
+        MacosActivityCounts(
+          keyDowns: now.keyDowns,
+          flagsChanged: now.flagsChanged,
+          buttonDowns: now.buttonDowns,
+          scrolls: now.scrolls,
+          moves: moves,
+        );
+    _last = MacosActivitySnapshot(
+      hid: keepMoves(snapshot.hid, last.hid.moves),
+      own: keepMoves(snapshot.own, last.own.moves),
+      pointer: last.pointer,
+    );
+    return true;
+  }
+
   /// Records [moves] hardware moves seen at [now], and returns whether the
   /// moves within [moveWindow] are sustained movement.
   bool _noteMoves(int moves, Duration now) {

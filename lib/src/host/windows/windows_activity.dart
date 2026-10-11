@@ -35,8 +35,16 @@ import 'win32_api.dart';
 /// mice that leave the raw input device list (Bluetooth turned off, a
 /// receiver unplugged), read on every heartbeat. Each poll that sees the
 /// count grow emits on [devicesLost], and the session stops.
+///
+/// **Checked before each event (RIN-42).** [checkNow] reads the same two
+/// counters as a poll, with two leaf FFI calls that load atomics, so the
+/// session can ask before every injected event.
 final class WindowsLocalActivity
-    implements LocalActivityMonitor, LocalDeviceMonitor, LocalInputDiagnostics {
+    implements
+        LocalActivityMonitor,
+        LocalDeviceMonitor,
+        LocalActivityCheck,
+        LocalInputDiagnostics {
   /// Creates a monitor on [native].
   WindowsLocalActivity(
     this._native, {
@@ -143,6 +151,26 @@ final class WindowsLocalActivity
     }
     if (local) _controller.add(null);
     if (deviceLost) _devices.add(null);
+  }
+
+  /// Reads the counters now (RIN-42): local input or a removed device since
+  /// the last read counts, and is consumed. Health is left to the poll.
+  @override
+  bool checkNow() {
+    if (!isMonitoring) return false;
+    var local = false;
+    final c = _native.count();
+    if (c != _last) {
+      _last = c;
+      local = true;
+    }
+    final lost = _native.devicesLost();
+    if (lost != _lastDevicesLost) {
+      _lastDevicesLost = lost;
+      _devices.add(null);
+      local = true;
+    }
+    return local;
   }
 
   /// Whether the hooks are out: not installed, or no hook thread. A stale

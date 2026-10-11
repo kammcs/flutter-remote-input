@@ -45,6 +45,53 @@ void main() {
     );
   });
 
+  group('checkDiscrete (RIN-42)', () {
+    test('a key, modifier, button or scroll between polls counts once', () {
+      expect(d.checkDiscrete(snap(keys: 1)), isFalse); // no baseline yet
+      d.update(snap(), ms(0));
+      expect(d.checkDiscrete(snap()), isFalse);
+      expect(d.checkDiscrete(snap(keys: 1)), isTrue);
+      expect(d.checkDiscrete(snap(keys: 1)), isFalse);
+      // Consumed: the next poll doesn't report it again.
+      expect(d.update(snap(keys: 1), ms(10)), isFalse);
+      expect(d.checkDiscrete(snap(keys: 1, flags: 1)), isTrue);
+      expect(d.checkDiscrete(snap(keys: 1, flags: 1, buttons: 1)), isTrue);
+      expect(
+        d.checkDiscrete(snap(keys: 1, flags: 1, buttons: 1, scrolls: 1)),
+        isTrue,
+      );
+    });
+
+    test('movement is left to the poll', () {
+      d.update(snap(pointer: const Offset(100, 100)), ms(0));
+      expect(
+        d.checkDiscrete(snap(moves: 5, pointer: const Offset(200, 200))),
+        isFalse,
+      );
+      // A key found between polls keeps the movement for the poll to judge.
+      expect(
+        d.checkDiscrete(
+          snap(keys: 1, moves: 5, pointer: const Offset(200, 200)),
+        ),
+        isTrue,
+      );
+      expect(
+        d.update(
+          snap(keys: 1, moves: 5, pointer: const Offset(200, 200)),
+          ms(10),
+        ),
+        isTrue,
+      );
+    });
+
+    test('off when the package\'s own events reach the HID counts', () {
+      d = MacosActivityDetector(ownEventsReachHidState: true);
+      d.update(snap(), ms(0));
+      expect(d.checkDiscrete(snap(keys: 1)), isFalse);
+      expect(d.update(snap(keys: 1), ms(10)), isTrue);
+    });
+  });
+
   test('counters that wrap around 2^32 still count', () {
     d.update(snap(keys: 0xFFFFFFFF), ms(0));
     expect(d.update(snap(keys: 0), ms(10)), isTrue);

@@ -196,9 +196,9 @@ final class RecordingInjector implements InputInjector {
 }
 
 /// A [LocalActivityMonitor] driven by the test, with the optional
-/// [LocalDeviceMonitor].
+/// [LocalDeviceMonitor] and [LocalActivityCheck].
 final class FakeLocalActivity
-    implements LocalActivityMonitor, LocalDeviceMonitor {
+    implements LocalActivityMonitor, LocalDeviceMonitor, LocalActivityCheck {
   final StreamController<void> _activity = StreamController.broadcast(
     sync: true,
   );
@@ -229,6 +229,23 @@ final class FakeLocalActivity
   /// Reports local input, as if the person at the host touched their mouse
   /// or keyboard.
   void simulateInput() => _activity.add(null);
+
+  /// Local input the counters show but the poll hasn't reported yet (RIN-42):
+  /// [checkNow] finds it, and nothing else reports it.
+  void simulateUnpolledInput() => _unpolled = true;
+
+  bool _unpolled = false;
+
+  /// How many times [checkNow] was called.
+  int checks = 0;
+
+  @override
+  bool checkNow() {
+    checks++;
+    if (!isMonitoring || !_unpolled) return false;
+    _unpolled = false;
+    return true;
+  }
 }
 
 /// A [SecureContextProbe] driven by the test.
