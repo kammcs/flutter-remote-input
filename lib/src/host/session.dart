@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'dart:ui' show Offset, Rect;
 
 import 'package:clock/clock.dart';
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show listEquals, visibleForTesting;
 
 import '../keys.dart';
 import '../link.dart';
@@ -52,6 +52,19 @@ ControlSession createControlSession({
 /// Stops [session] for `RemoteInputHost.stopAll`. Internal.
 void stopSessionForAll(ControlSession? session) =>
     session?._stop(StopReason.stopAll);
+
+/// What [session] holds right now: its queued reliable input and the keys
+/// and buttons it has pressed. Counts only. Internal, for the session fuzz
+/// test (`test/host/session_fuzz_test.dart`), which checks them against the
+/// limits after every step; not exported.
+@visibleForTesting
+({int queued, int heldKeys, int heldButtons}) debugSessionHeld(
+  ControlSession session,
+) => (
+  queued: session._queue.length,
+  heldKeys: session._heldKeys.length,
+  heldButtons: session._heldButtons.length,
+);
 
 /// One viewer's control of this machine, from `RemoteInputHost.enable`
 /// until it stops (`docs/design.md` §6).
