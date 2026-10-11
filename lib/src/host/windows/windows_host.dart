@@ -29,9 +29,26 @@ final class WindowsHostPlatform implements HostPlatform {
   /// per-monitor DPI aware (V2), as Flutter's runner manifest makes it.
   /// Otherwise Windows would virtualize the coordinates the package reads
   /// and posts.
+  ///
+  /// Then [HostUnavailableReason.elevatedHost] when this process
+  /// [isElevated], unless [allowElevatedHost].
   @override
-  HostUnavailableReason? checkAvailable() =>
-      api.isPerMonitorAwareV2() ? null : HostUnavailableReason.dpiUnaware;
+  HostUnavailableReason? checkAvailable({bool allowElevatedHost = false}) {
+    if (!api.isPerMonitorAwareV2()) return HostUnavailableReason.dpiUnaware;
+    if (!allowElevatedHost && isElevated) {
+      return HostUnavailableReason.elevatedHost;
+    }
+    return null;
+  }
+
+  /// Whether this process runs elevated: its integrity level is High
+  /// ("Run as administrator", or any app of an administrator with UAC
+  /// off) or above (System). A level that can't be read counts as
+  /// elevated: fail closed.
+  bool get isElevated {
+    final level = api.ownIntegrityLevel;
+    return level == null || level >= IntegrityLevel.high;
+  }
 
   @override
   final WindowsInjector injector;

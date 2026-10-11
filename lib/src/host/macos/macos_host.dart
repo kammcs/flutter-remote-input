@@ -37,8 +37,10 @@ final class MacosHostPlatform implements HostPlatform {
 
   /// [HostUnavailableReason.permissionDenied] without the Accessibility
   /// permission. Asks the OS each time, which takes about 12 ms.
+  /// [allowElevatedHost] has no effect: elevation is a Windows check.
   @override
-  HostUnavailableReason? checkAvailable() => _native.postAccess(fresh: true)
+  HostUnavailableReason? checkAvailable({bool allowElevatedHost = false}) =>
+      _native.postAccess(fresh: true)
       ? null
       : HostUnavailableReason.permissionDenied;
 

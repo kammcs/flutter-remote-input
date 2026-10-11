@@ -211,6 +211,9 @@ abstract final class IntegrityLevel {
 
   /// `SECURITY_MANDATORY_HIGH_RID`: run as administrator.
   static const int high = 0x3000;
+
+  /// `SECURITY_MANDATORY_SYSTEM_RID`: services and the system.
+  static const int system = 0x4000;
 }
 
 /// The last sub-authority of the `SID` in [sid]: an integrity level, for a

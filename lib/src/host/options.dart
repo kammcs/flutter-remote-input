@@ -255,6 +255,7 @@ final class HostOptions {
     this.allowSystemKeys = false,
     this.limits,
     this.protectHostWindows = true,
+    this.allowElevatedHost = false,
   });
 
   /// When the session stops by itself, with `StopReason.expired`: a local
@@ -298,4 +299,15 @@ final class HostOptions {
   /// or its chat. On by default; only tests that inject into their own
   /// window turn it off.
   final bool protectHostWindows;
+
+  /// Whether a session may start while the host runs elevated (Windows:
+  /// "Run as administrator", integrity level High or above). False by
+  /// default, and `RemoteInputHost.enable` throws
+  /// `HostUnavailableException(HostUnavailableReason.elevatedHost)`:
+  /// an elevated host's input reaches elevated apps, so a viewer could
+  /// open Task Manager and run anything as administrator. With true, the
+  /// viewer can drive apps at the host's level, as the presenter could;
+  /// UAC prompts and the secure desktop stay out of reach
+  /// (`docs/design.md` §6.5). No effect on macOS.
+  final bool allowElevatedHost;
 }

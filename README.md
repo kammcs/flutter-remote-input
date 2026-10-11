@@ -76,6 +76,8 @@ if (status == RemoteInputPermissionStatus.denied) {
 
 The host process must be **per-monitor DPI aware (V2)**, as Flutter's default Windows runner is; otherwise `checkAvailable()` reports `dpiUnaware`. Apps run as administrator, UAC prompts, the lock screen and Ctrl+Alt+Del can't be controlled (`RemoteInputHost.limitations` lists these for your UI).
 
+**An app run as administrator is refused by default.** When the host process is elevated (integrity level High or above: "Run as administrator", or an administrator's apps with UAC off), `checkAvailable()` reports `elevatedHost` and `enable()` throws `HostUnavailableException(elevatedHost)`. An elevated host's input reaches elevated apps, so a viewer could open Task Manager and run anything as administrator. Start your app normally. If you must run elevated, `HostOptions(allowElevatedHost: true)` lets the session start, and the viewer can then control administrator apps, so tell the presenter; pass the same options to `checkAvailable(options: ...)` to check ahead.
+
 ## Safety stance
 
 The package injects input into someone's computer, so:
@@ -86,7 +88,7 @@ The package injects input into someone's computer, so:
 - **Rate limits and bounds checks** on every message. Input can't address anything outside the shared surface.
 - **System keys are dropped by default:** power, sleep, media, app-launch and browser keys, and Fn (the Globe key on a Mac). `HostOptions(allowSystemKeys: true)` lets them through.
 - **Keys and window shares.** A window share injects keys only while the shared window is in front, but the OS acts on its own shortcuts before any window sees them. **Pass `KeyFilters.windowShare` for window shares:** it drops Win+anything, Ctrl+Shift+Esc and Alt+Tab on Windows, and Cmd+Tab, Cmd+Space, Force Quit, lock and log out on a Mac, while copy, paste and other ordinary shortcuts keep working. It isn't on by default. What still gets through: on a display share, keys go to whatever window has focus and OS shortcuts work; with the preset, shortcuts other software adds (launchers like Alfred), unmodified F-keys the OS assigns, screenshots, and whatever your own filter allows. [Design §6.4](docs/design.md#64-rate-limits-and-bounds-checks) has the full lists.
-- **No elevated or secure contexts.** It won't drive administrator apps or UAC prompts on Windows, or type into password fields on macOS. It reports when it's blocked.
+- **No elevated or secure contexts.** It won't drive administrator apps or UAC prompts on Windows, or type into password fields on macOS. It reports when it's blocked. On Windows it refuses to run as administrator unless you opt in.
 - **No logging of what anyone types.**
 
 **Consent, banners, grants, revoke hotkeys and audit logs are your app's job.** The package gives you the states and controls to build them on. [The design's §9](docs/design.md#9-how-the-first-consumer-uses-it) shows how its first consumer uses it, including **who can read the input over an SFU**: restrict subscriptions to the input channels on your server.

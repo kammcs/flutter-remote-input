@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:remote_input/remote_input.dart';
 import 'package:remote_input/src/host/windows/input_records.dart';
 import 'package:remote_input/src/host/windows/win32_api.dart'
-    show NativeActivityReason;
+    show IntegrityLevel, NativeActivityReason;
 import 'package:remote_input/src/host/windows/windows_host.dart';
 import 'package:remote_input/testing.dart';
 
@@ -49,6 +49,131 @@ void main() {
     );
     api.perMonitorV2 = true;
     expect(platform.checkAvailable(), isNull);
+  });
+
+  group('an elevated host (RIN-44)', () {
+    const usageA = 0x00070004;
+    tearDown(RemoteInputHost.stopAll);
+
+    /// Enables a session on the shared window, whose process (4242) runs
+    /// at [target], completes the handshake and types one key. Returns the
+    /// session and whether the key reached `SendInput`.
+    (ControlSession, bool) typeInto(
+      FakeAsync async, {
+      required int target,
+      HostOptions options = const HostOptions(),
+    }) {
+      api.integrity[4242] = target;
+      final pair = MemoryInputLink.pair();
+      final viewer = RawViewer(pair.viewer);
+      final session = RemoteInputHost(platform: platform).enable(
+        link: pair.host,
+        surface: const SharedSurface.window(_hwnd),
+        options: options,
+      );
+      async.flushMicrotasks();
+      viewer.hello();
+      async.flushMicrotasks();
+      viewer
+        ..key(usageA, KeyAction.down)
+        ..key(usageA, KeyAction.up);
+      async.flushMicrotasks();
+      return (session, api.records.whereType<KeyRecord>().isNotEmpty);
+    }
+
+    test('a medium-integrity host is available', () {
+      api.ownIntegrityLevel = IntegrityLevel.medium;
+      expect(platform.isElevated, isFalse);
+      expect(platform.checkAvailable(), isNull);
+      expect(RemoteInputHost(platform: platform).checkAvailable(), isNull);
+    });
+
+    for (final (name, level) in [
+      ('high', IntegrityLevel.high),
+      ('system', IntegrityLevel.system),
+      ('unreadable', null),
+    ]) {
+      test('a $name-integrity host is refused', () {
+        api.ownIntegrityLevel = level;
+        expect(platform.isElevated, isTrue);
+        expect(platform.checkAvailable(), HostUnavailableReason.elevatedHost);
+        final host = RemoteInputHost(platform: platform);
+        expect(host.checkAvailable(), HostUnavailableReason.elevatedHost);
+        expect(
+          () => host.enable(
+            link: MemoryInputLink.pair().host,
+            surface: const SharedSurface.window(_hwnd),
+          ),
+          throwsA(
+            isA<HostUnavailableException>().having(
+              (e) => e.reason,
+              'reason',
+              HostUnavailableReason.elevatedHost,
+            ),
+          ),
+        );
+        expect(RemoteInputHost.activeSession, isNull);
+        expect(api.records, isEmpty);
+      });
+    }
+
+    test('DPI awareness is reported first, even with the opt-in', () {
+      api
+        ..ownIntegrityLevel = IntegrityLevel.high
+        ..perMonitorV2 = false;
+      expect(platform.checkAvailable(), HostUnavailableReason.dpiUnaware);
+      expect(
+        platform.checkAvailable(allowElevatedHost: true),
+        HostUnavailableReason.dpiUnaware,
+      );
+    });
+
+    test('with allowElevatedHost, an elevated host drives apps at its '
+        'level, and no higher', () {
+      fakeAsync((async) {
+        api.ownIntegrityLevel = IntegrityLevel.high;
+        const options = HostOptions(allowElevatedHost: true);
+        final host = RemoteInputHost(platform: platform);
+        expect(host.checkAvailable(), HostUnavailableReason.elevatedHost);
+        expect(host.checkAvailable(options: options), isNull);
+
+        // Task Manager runs at High: reachable from a High host.
+        final (session, typed) = typeInto(
+          async,
+          target: IntegrityLevel.high,
+          options: options,
+        );
+        expect(typed, isTrue);
+        expect(session.state, const SessionActive());
+        session.stop();
+        async.flushMicrotasks();
+
+        // A System-level window stays out of reach (after the probe's
+        // per-process cache has expired: same process id).
+        async.elapse(const Duration(seconds: 3));
+        api.calls.clear();
+        final (again, typedAgain) = typeInto(
+          async,
+          target: IntegrityLevel.system,
+          options: options,
+        );
+        expect(typedAgain, isFalse);
+        expect(again.state, const SessionBlocked(BlockReason.elevatedTarget));
+        again.stop();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('a medium host still never reaches an elevated app', () {
+      fakeAsync((async) {
+        api.ownIntegrityLevel = IntegrityLevel.medium;
+        final (session, typed) = typeInto(async, target: IntegrityLevel.high);
+        expect(typed, isFalse);
+        expect(session.state, const SessionBlocked(BlockReason.elevatedTarget));
+        session.stop();
+        async.flushMicrotasks();
+      });
+    });
   });
 
   test('a viewer drives a window surface', () {

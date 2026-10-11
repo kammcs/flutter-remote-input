@@ -15,8 +15,13 @@ abstract interface class HostPlatform {
   PeerPlatform get platform;
 
   /// Why the host can't inject now, or `null` if it can. Checked when a
-  /// session is enabled.
-  HostUnavailableReason? checkAvailable();
+  /// session is enabled, with [allowElevatedHost] from its
+  /// `HostOptions.allowElevatedHost`.
+  ///
+  /// A platform that reports [HostUnavailableReason.elevatedHost] does so
+  /// only when [allowElevatedHost] is false, and only once every other
+  /// check has passed.
+  HostUnavailableReason? checkAvailable({bool allowElevatedHost = false});
 
   /// Posts OS input events.
   InputInjector get injector;
@@ -45,6 +50,14 @@ enum HostUnavailableReason {
   /// The process isn't per-monitor DPI aware (Windows), so its coordinates
   /// would be virtualized.
   dpiUnaware,
+
+  /// The host process runs elevated (Windows: integrity level High or
+  /// above, "Run as administrator"), so a viewer could drive elevated apps
+  /// at its level, such as Task Manager's "Run new task" as administrator
+  /// (`docs/design.md` §6.5). Refused unless the app opts in with
+  /// `HostOptions.allowElevatedHost`. Reported only when nothing else
+  /// stops the host, so an app that opted in can treat it as available.
+  elevatedHost,
 }
 
 /// Thrown by `RemoteInputHost` when the host can't inject.

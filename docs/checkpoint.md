@@ -167,7 +167,7 @@ Built and unit-tested on macOS; the native C++ is compile-checked with mingw-w64
 4. Local input wins (§6.3): pause within 50 ms (the test prints it). The package's own events, its `SetCursorPos` fallback, and the left Ctrl Windows synthesizes for an injected AltGr must not pause the session.
 5. Secure contexts (§6.5): keys and pointer blocked over an admin app (Task Manager), both by the integrity check and by `SendInput` refusing. UAC, Ctrl+Alt+Del and the lock screen show `secureDesktop` (check whether Win+L leaves the input desktop as `Default`). AppContainer/Store apps are not reported as elevated.
 6. §7.2: back/forward buttons reach Flutter; both wheel axes scroll and feel right; extended keys (arrows, right Ctrl) work by scan code, and media keys too once allowed (step 9); emoji (surrogate pairs) type correctly.
-7. `RemoteInputHost.isSupported` is true in the example, and `checkAvailable()` is `null` under Flutter's PerMonitorV2 manifest.
+7. `RemoteInputHost.isSupported` is true in the example, and `checkAvailable()` is `null` under Flutter's PerMonitorV2 manifest, started normally (not as administrator: step 10).
 8. **Review fixes (M7):**
    - *Own windows:* share a display; the viewer clicks the host app's Stop button or consent dialog: nothing happens. With the host app in front, viewer keys are blocked (`hostAppInFront`); with another app in front, keys work.
    - *Movement while the viewer moves:* while the viewer drags or moves continuously, move the physical mouse slowly (about 1 cm): the session pauses within 50 ms. Resting a hand on the mouse or tapping the desk doesn't pause it.
@@ -178,6 +178,8 @@ Built and unit-tested on macOS; the native C++ is compile-checked with mingw-w64
    - *Defaults* (consent dialog: both new boxes off): Sleep, Power, Wake Up and the Launch keys do nothing on the host; the session's stats count them as `systemKey`. Win+L locks, Win+H opens dictation, Win+1 opens the first taskbar app, Ctrl+Shift+Esc opens Task Manager: shortcuts aren't filtered by default.
    - *Block system shortcuts* (`KeyFilters.windowShare`): Win+L, Win+H, Win+1 and Ctrl+Shift+Esc do nothing, and neither does a hardware Alt+Tab or Win+R from a Windows viewer (or Ctrl+R from a Mac viewer, which is Win+R on the host). Nothing stays held afterwards: type a lower-case letter in Notepad. Ctrl+C, Ctrl+V, Ctrl+Z, Ctrl+A (⌘ from a Mac viewer), Shift letters, Alt+F4 and Escape still work.
    - *Allow system keys*: Launch App 2 opens the calculator and the media keys work (try Sleep or Power only on a machine you can lose the session on).
+
+10. **An elevated host is refused (RIN-44).** Right-click the example's `.exe` (or a terminal for `flutter run`) → **Run as administrator**, and choose **Host this computer**: it shows "This computer can't be controlled now" with the administrator message, and nothing listens. In Task Manager's Details tab (add the **Elevated** column) the example shows Yes. Run it normally: the display picker appears. **With the opt-in** (`HostOptions(allowElevatedHost: true)`; the example has no switch for it, so add the option to the `enable` call in `_onRequest` in a local build, not committed): an elevated host pairs, and from the viewer Ctrl+Shift+Esc opens Task Manager, which the viewer can then click and type into (at the host's level), while a UAC prompt still blocks with `secureDesktop`. Run normally, the same Task Manager blocks the viewer (`elevatedTarget`).
 
 ### C2. macOS: the Accessibility grant and the injection test
 
@@ -223,6 +225,8 @@ Fill in one row per run. Result: pass, fail, or n/a with a reason.
 | C1.9 System keys, shortcuts (RIN-43): `windowShare` | → Windows | | | | | Win+L, Win+H, Win+1, Ctrl+Shift+Esc dropped; Ctrl+C/V work |
 | C2.9 System keys, shortcuts (RIN-43): defaults | → macOS | | | | | Sleep, Power, Wake Up, Launch 1/2, Fn, Fn Fn dropped |
 | C2.9 System keys, shortcuts (RIN-43): `windowShare` | → macOS | | | | | Ctrl+Cmd+Q, Cmd+Tab, Cmd+Space dropped; Cmd+C/V work; Fn with allowSystemKeys: |
+| C1.10 Elevated host refused (RIN-44) | → Windows | | | | | Run as administrator: refused; normal start: available |
+| C1.10 Elevated host, opt-in (RIN-44) | → Windows | | | | | Task Manager driven at High; UAC still `secureDesktop` |
 | A1 Pointer | Windows → macOS | | | | | |
 | A1 Pointer | macOS → Windows | | | | | |
 | A2 Keys | Windows → macOS | | | | | |

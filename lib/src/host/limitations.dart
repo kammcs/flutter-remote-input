@@ -3,6 +3,10 @@ import '../protocol/wire_types.dart';
 /// Something a host can't control, for apps to show in their UI
 /// (`docs/design.md` §7.4). Localize by value; [description] is English.
 enum HostLimitation {
+  /// Windows: anything, while the host app runs as administrator, unless
+  /// the app opts in (`HostOptions.allowElevatedHost`).
+  elevatedHost('Anything, while this app runs as administrator'),
+
   /// Windows: apps run as administrator, Task Manager and elevated
   /// installers (UIPI).
   elevatedApps('Apps run as administrator, such as Task Manager'),
@@ -50,6 +54,7 @@ enum HostLimitation {
     if (isWeb) return const [unsupportedPlatform];
     return switch (platform) {
       PeerPlatform.windows => const [
+        elevatedHost,
         elevatedApps,
         secureDesktop,
         ctrlAltDel,

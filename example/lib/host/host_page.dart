@@ -319,6 +319,9 @@ class _HostPageState extends State<HostPage> {
                 'The app is not per-monitor DPI aware, so its coordinates '
                     'would be wrong. Check the Windows runner manifest.',
               HostUnavailableReason.permissionDenied => '',
+              HostUnavailableReason.elevatedHost =>
+                'This app is running as administrator, so a viewer could '
+                    'control administrator apps. Start it normally.',
               HostUnavailableReason.unsupportedPlatform =>
                 'This platform has no injector.',
             }),

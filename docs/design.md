@@ -302,7 +302,13 @@ Defaults, which the app can lower but not raise past the caps:
 
 ### 6.5 No injection into elevated or secure contexts
 
-The package never asks for elevation, never installs a service, and never uses `uiAccess`. Where the OS would block or should block input, the session reports **`blocked(reason)`**, drops input (it never queues it for later), and resumes when the condition clears:
+The package never asks for elevation, never installs a service, and never uses `uiAccess`. **It refuses to run elevated** (RIN-44): on Windows, a host process at integrity level High or above ("Run as administrator", any app of an administrator with UAC turned off, or a System process) gets `HostUnavailableReason.elevatedHost` from `checkAvailable()`, and `enable()` throws `HostUnavailableException(elevatedHost)`. The UIPI check below compares each target with the host's own level, so an elevated host would let a viewer drive every elevated app: Ctrl+Shift+Esc, then Task Manager's "Run new task" with "Create this task with administrative privileges", runs anything as administrator. An integrity level that can't be read counts as elevated.
+
+- **The opt-in:** `HostOptions.allowElevatedHost: true` lets `enable` start a session anyway. The viewer can then drive apps at the host's level, as the presenter could; UAC prompts (the secure desktop) and System-level windows stay out of reach.
+- **`checkAvailable` and the opt-in.** `RemoteInputHost.checkAvailable(options:)` answers what `enable` would do with those options. Without them it reports `elevatedHost` for an elevated host whatever the app intends, so an app that opted in can still warn the presenter. `elevatedHost` is reported only when nothing else stops the host (DPI awareness is checked first), so an app that opted in can treat it as available.
+- It isn't on the wire (§5): the session never starts. macOS has no such check, and the option does nothing there.
+
+Where the OS would block or should block input, the session reports **`blocked(reason)`**, drops input (it never queues it for later), and resumes when the condition clears:
 
 | Context | Detection | State |
 |---|---|---|
@@ -344,7 +350,7 @@ RemoteInputHost / ControlSession          pure Dart: handshake, sequencing, coal
 - **Pointer:** absolute moves (§3.2); `MOUSEEVENTF_LEFTDOWN`/`UP` and the others, `XBUTTON1`/`2` for back and forward; `MOUSEEVENTF_WHEEL` and `HWHEEL` in `WHEEL_DELTA` units (120 per notch). **Wheel (open question 9, answered):** a wire line is one host line, `lines × 120 / SPI_GETWHEELSCROLLLINES` (`SPI_GETWHEELSCROLLCHARS` horizontally; 0 or page-scroll settings fall back to 3); pixels use 100/3 px per line (Chromium's 100 px per notch at 3 lines); fractions accumulate and are sent as they reach whole units, like a precision touchpad. **Double clicks (open question 6, answered):** Windows' own timing is trusted and `clickCount` isn't replayed; presses are applied in order as they arrive, so a double click survives jitter up to the double-click time minus the viewer's own interval. `MOUSEINPUT.time` isn't rewritten, because apps see those timestamps.
 - **Keys:** scan codes with `KEYEVENTF_SCANCODE` (plus `KEYEVENTF_EXTENDEDKEY` for `E0` keys, such as the arrows and right Ctrl), from `lib/src/keys/key_tables.g.dart`, generated from Flutter's key data (BSD-3-Clause; `tool/gen_key_tables.dart`). AltGr is right Alt with the extended flag; on layouts that have it, Windows also synthesizes a left Ctrl. Text with `KEYEVENTF_UNICODE` in one `SendInput` call, except line breaks and tabs, which press Enter and Tab by scan code (apps treat a Unicode newline inconsistently).
 - **Tagging:** every injected event carries the package's tag in `dwExtraInfo`, for diagnostics. The hook thread (§6.3) tells local input by Windows' injected flag, not by the tag: Windows has been seen to drop the tag from injected mouse moves (RIN-39).
-- **Elevation checks** compare the target process's token integrity level with the host's own. A token that can't be queried counts as elevated, and answers are cached per process for 2 s.
+- **Elevation checks** compare the target process's token integrity level with the host's own. A token that can't be queried counts as elevated, and answers are cached per process for 2 s. **The host itself must not be elevated** (RIN-44, §6.5): `checkAvailable()` reads its own level (the `TokenIntegrityLevel` query the comparison already uses) and reports `elevatedHost` at High or above, unless `HostOptions.allowElevatedHost`. With the opt-in, the comparison keeps System-level targets out of reach.
 - **Failures:** `SendInput` returns how many events it inserted. Fewer than asked, with `ERROR_ACCESS_DENIED`, means UIPI; the session reports `blocked(elevatedTarget)` even if the pre-check missed it.
 - **Other limits:** games that read raw input or use anti-cheat may ignore injected input, and a minimized Remote Desktop session has no input desktop. Neither is worked around.
 
@@ -385,7 +391,8 @@ RemoteInputHost / ControlSession          pure Dart: handshake, sequencing, coal
 
 For apps' UI text (`RemoteInputHost.limitations`):
 
-- **Windows:** apps run as administrator, UAC prompts, the lock and Ctrl+Alt+Del screens; Ctrl+Alt+Del itself; some games.
+- **Windows:** anything while the host app itself runs as administrator, unless the app opts in (`HostLimitation.elevatedHost`, §6.5); apps run as administrator, UAC prompts, the lock and Ctrl+Alt+Del screens; Ctrl+Alt+Del itself; some games.
+- **Both:** system keys (power, sleep, media and app-launch keys, Fn), unless the app allows them (`HostLimitation.systemKeys`, §6.4).
 - **macOS:** password fields and other Secure Event Input (keys only), the login window and lock screen, and nothing at all until the Accessibility permission is granted.
 - **Presenters on the web, iOS, Android and Linux** can't be controlled (§2.2).
 
@@ -481,6 +488,9 @@ if (permission != PermissionStatus.granted) {
 }
 
 final host = RemoteInputHost();
+if (host.checkAvailable() case final reason?) {     // dpiUnaware, permissionDenied, elevatedHost
+  return showUnavailable(reason);                   // checkAvailable(options:) for the options you'll pass
+}
 final displays = await host.displays();             // id, bounds, scaleFactor, isPrimary
 
 final session = host.enable(
@@ -493,6 +503,7 @@ final session = host.enable(
     localIdle: Duration(milliseconds: 1500),
     keyFilter: null,                                // KeyFilters.windowShare for window shares
     allowSystemKeys: false,                         // power, sleep, media, launch keys, Fn
+    allowElevatedHost: false,                       // Windows: refuse to run as administrator
   ),
 );
 
@@ -544,7 +555,7 @@ final testHost = RemoteInputHost(platform: platform);
 | **Coordinate escape** | Clicking outside the shared window or display | Normalized coordinates only, clamped to the surface; surface epochs; occlusion checks on window surfaces; a minimized window blocks input | Choosing a window share when control should be confined |
 | **Keyboard escape** | Typing into another app than the shared one, or a shortcut the OS acts on (Win+R, Win+L, Cmd+Tab, Cmd+Space, Sleep, LaunchApp) | Window surfaces: keys only while the shared window is in front. System keys dropped by default; `KeyFilters.windowShare` drops OS shortcuts on window shares (§6.4, RIN-43). **Display surfaces: keys go to any focused window**, and OS shortcuts other than system keys work | Passing `KeyFilters.windowShare` for window shares; saying what gets through in the consent text |
 | **Stuck input** | A key held down after the session ends | Releases on stop, pause, link loss, timeout, viewer blur and viewer backgrounding; refused releases retried | `stopAll()` in crash and exit handlers: a crashed host can't release |
-| **Privilege escalation** | Driving a UAC prompt or an elevated app | No elevation, no `uiAccess`, no service; elevated and secure contexts are detected and reported (§6.5). **If the host app itself runs elevated**, elevated apps are at its level and can be controlled | Showing the limits; not running the host elevated |
+| **Privilege escalation** | Driving a UAC prompt or an elevated app; from an elevated host, Task Manager's "Run new task" as administrator | No elevation, no `uiAccess`, no service; elevated and secure contexts are detected and reported (§6.5). **An elevated Windows host is refused** (`elevatedHost`, RIN-44) unless the app opts in with `allowElevatedHost`; then apps at its level can be controlled, System-level ones and UAC prompts can't | Showing the limits; not running the host elevated, and not opting in without telling the presenter |
 | **Session denial by a third party** | Someone who can write to the host's input channel sends 50 malformed messages and stops the session | Fails safe: the session stops (`protocolViolation`). Accepted risk | Restricting who can write to the channel |
 | **Other software injecting input on the host** | A second remote-control tool, an on-screen keyboard or a script injects input during a session | Local input wins counts only physical input (§6.3, RIN-39): on Windows, any event flagged as injected, by any process and with any tag, is ignored, so other software's input doesn't pause the session. Physical input never carries the injected flag, so the presenter's own mouse and keyboard still pause it. Accepted risk | Deciding which other software may inject on the host during a session |
 | **Malformed input** | Crafted bytes against the decoder | Strict length checks, no exceptions out of the decoder, fuzz tests (§12) | — |
