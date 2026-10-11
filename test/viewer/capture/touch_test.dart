@@ -300,6 +300,59 @@ void main() {
       await h.finish(tester);
     });
 
+    testWidgets('a zoomed view stays covered when the view shrinks (RIN-23)', (
+      tester,
+    ) async {
+      final h = Harness();
+      final height = ValueNotifier<double>(600);
+      await h.start(
+        tester,
+        direct,
+        wrap: (capture) => ValueListenableBuilder<double>(
+          valueListenable: height,
+          builder: (_, value, child) => Align(
+            alignment: Alignment.topCenter,
+            child: SizedBox(width: 800, height: value, child: child),
+          ),
+          child: capture,
+        ),
+      );
+      // 2× about the centre: the picture is drawn from (-400, -300).
+      await twoFingers(
+        tester,
+        const Offset(350, 300),
+        const Offset(450, 300),
+        const Offset(-10, 0),
+        const Offset(10, 0),
+        5,
+      );
+      await h.settle(tester);
+      Matrix4 transform() => tester
+          .widget<Transform>(
+            find.descendant(
+              of: find.byType(RemoteInputCapture),
+              matching: find.byType(Transform),
+            ),
+          )
+          .transform;
+      expect(transform().getTranslation().y, closeTo(-300, 1e-6));
+
+      // A soft keyboard pushes the layout up: the view is 200 tall.
+      height.value = 200;
+      await tester.pump();
+      await tester.pump();
+      final t = transform();
+      final scale = t.getMaxScaleOnAxis();
+      final top = t.getTranslation().y;
+      // The scaled picture still covers the whole view: nothing blank
+      // below it, and its top isn't below the view's top.
+      expect(top, lessThanOrEqualTo(0));
+      expect(top + 200 * scale, greaterThanOrEqualTo(200 - 1e-6));
+      expect(top, closeTo(-200, 1e-6));
+      await h.finish(tester);
+      height.dispose();
+    });
+
     testWidgets('a stylus works directly even in trackpad mode', (
       tester,
     ) async {

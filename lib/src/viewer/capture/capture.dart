@@ -44,6 +44,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderProxyBox;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
@@ -216,6 +217,43 @@ final class _Finger {
 
 /// Takes every pointer that lands on the capture while it's active, so
 /// ancestors (scroll views, taps) don't also act on them.
+/// Reports its size after each layout that changes it, once the frame is
+/// done (the zoom can't change during layout).
+final class _SizeObserver extends SingleChildRenderObjectWidget {
+  const _SizeObserver({required this.onResize, super.child});
+
+  final ValueChanged<Size> onResize;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderSizeObserver(onResize);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderSizeObserver renderObject,
+  ) => renderObject.onResize = onResize;
+}
+
+final class _RenderSizeObserver extends RenderProxyBox {
+  _RenderSizeObserver(this.onResize);
+
+  ValueChanged<Size> onResize;
+  Size? _reported;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    if (size == _reported) return;
+    final first = _reported == null;
+    _reported = size;
+    // Nothing is zoomed before the first layout.
+    if (first) return;
+    final reported = size;
+    SchedulerBinding.instance.addPostFrameCallback((_) => onResize(reported));
+  }
+}
+
 final class _ClaimRecognizer extends OneSequenceGestureRecognizer {
   _ClaimRecognizer({required this.isEnabled});
 
@@ -1354,65 +1392,84 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
       canRequestFocus: widget.enableKeyboard,
       onKeyEvent: _onKeyEvent,
       onFocusChange: _onFocusChange,
-      child: Listener(
-        behavior: HitTestBehavior.opaque,
-        onPointerDown: _onPointerDown,
-        onPointerMove: _onPointerMove,
-        onPointerUp: _onPointerUp,
-        onPointerCancel: _onPointerCancel,
-        onPointerHover: _onPointerHover,
-        onPointerSignal: _onPointerSignal,
-        onPointerPanZoomStart: _onPanZoomStart,
-        onPointerPanZoomUpdate: _onPanZoomUpdate,
-        onPointerPanZoomEnd: _onPanZoomEnd,
-        child: RawGestureDetector(
-          gestures: {
-            _ClaimRecognizer:
-                GestureRecognizerFactoryWithHandlers<_ClaimRecognizer>(
-                  () => _ClaimRecognizer(isEnabled: () => _active),
-                  (_) {},
-                ),
-          },
-          child: ClipRect(
-            child: Stack(
-              fit: StackFit.passthrough,
-              children: [
-                ValueListenableBuilder<ViewZoom>(
-                  valueListenable: _zoom,
-                  builder: (context, zoom, child) => zoom.isIdentity
-                      ? child!
-                      : Transform(
-                          transform:
-                              Matrix4.diagonal3Values(zoom.scale, zoom.scale, 1)
-                                ..setTranslationRaw(
+      child: _SizeObserver(
+        onResize: _onResize,
+        child: Listener(
+          behavior: HitTestBehavior.opaque,
+          onPointerDown: _onPointerDown,
+          onPointerMove: _onPointerMove,
+          onPointerUp: _onPointerUp,
+          onPointerCancel: _onPointerCancel,
+          onPointerHover: _onPointerHover,
+          onPointerSignal: _onPointerSignal,
+          onPointerPanZoomStart: _onPanZoomStart,
+          onPointerPanZoomUpdate: _onPanZoomUpdate,
+          onPointerPanZoomEnd: _onPanZoomEnd,
+          child: RawGestureDetector(
+            gestures: {
+              _ClaimRecognizer:
+                  GestureRecognizerFactoryWithHandlers<_ClaimRecognizer>(
+                    () => _ClaimRecognizer(isEnabled: () => _active),
+                    (_) {},
+                  ),
+            },
+            child: ClipRect(
+              child: Stack(
+                fit: StackFit.passthrough,
+                children: [
+                  ValueListenableBuilder<ViewZoom>(
+                    valueListenable: _zoom,
+                    builder: (context, zoom, child) => zoom.isIdentity
+                        ? child!
+                        : Transform(
+                            transform:
+                                Matrix4.diagonal3Values(
+                                  zoom.scale,
+                                  zoom.scale,
+                                  1,
+                                )..setTranslationRaw(
                                   zoom.offset.dx,
                                   zoom.offset.dy,
                                   0,
                                 ),
-                          child: child,
-                        ),
-                  child: widget.child,
-                ),
-                if (_active && _touchMode == TouchMode.trackpad)
-                  Positioned.fill(
-                    child: IgnorePointer(child: _cursorLayerWidget()),
+                            child: child,
+                          ),
+                    child: widget.child,
                   ),
-                if (_composing.isNotEmpty)
-                  Positioned(
-                    left: 16,
-                    right: 16,
-                    bottom: 16,
-                    child: IgnorePointer(
-                      child: Center(child: _ComposingBubble(text: _composing)),
+                  if (_active && _touchMode == TouchMode.trackpad)
+                    Positioned.fill(
+                      child: IgnorePointer(child: _cursorLayerWidget()),
                     ),
-                  ),
-                if (overlay != null) Positioned.fill(child: overlay),
-              ],
+                  if (_composing.isNotEmpty)
+                    Positioned(
+                      left: 16,
+                      right: 16,
+                      bottom: 16,
+                      child: IgnorePointer(
+                        child: Center(
+                          child: _ComposingBubble(text: _composing),
+                        ),
+                      ),
+                    ),
+                  if (overlay != null) Positioned.fill(child: overlay),
+                ],
+              ),
             ),
           ),
         ),
       ),
     );
+  }
+
+  /// Keeps the zoomed picture covering the view when the view's size
+  /// changes (a soft keyboard pushing the layout up, a window resize), not
+  /// only at the next gesture (RIN-23).
+  void _onResize(Size size) {
+    if (!mounted) return;
+    final zoom = _zoom.value;
+    if (zoom.isIdentity) return;
+    final clamped = zoom.clampedTo(size);
+    if (clamped != zoom) _zoom.value = clamped;
   }
 
   Widget _cursorLayerWidget() => LayoutBuilder(
