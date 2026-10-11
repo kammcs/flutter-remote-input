@@ -311,7 +311,7 @@ DecodeResult decodeMessage(Uint8List bytes) {
       if (length > maxTextBytes || r.remaining < length) return _failValue;
       final String text;
       try {
-        text = utf8.decode(r.view(length));
+        text = _decodeUtf8(r.view(length));
       } on FormatException {
         return _failValue;
       }
@@ -323,6 +323,25 @@ DecodeResult decodeMessage(Uint8List bytes) {
       return const DecodeFailed(DecodeError.unknownType);
   }
   return Decoded(tag, message);
+}
+
+/// [bytes] as UTF-8, keeping a leading U+FEFF. Dart's decoder drops one as
+/// a byte-order mark, but in a `Text` message it's text, and dropping it
+/// broke the round trip (found by `tool/fuzz.dart`). Throws a
+/// [FormatException] for invalid UTF-8.
+String _decodeUtf8(Uint8List bytes) {
+  if (bytes.length < 3 ||
+      bytes[0] != 0xEF ||
+      bytes[1] != 0xBB ||
+      bytes[2] != 0xBF) {
+    return utf8.decode(bytes);
+  }
+  // A leading space isn't a byte-order mark, so nothing after it is
+  // dropped; it's one UTF-16 unit, removed again by substring.
+  final spaced = Uint8List(bytes.length + 1)
+    ..[0] = 0x20
+    ..setRange(1, bytes.length + 1, bytes);
+  return utf8.decode(spaced).substring(1);
 }
 
 /// The largest value a u64 field carries: 2^53 - 1, exact on every

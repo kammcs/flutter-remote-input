@@ -170,6 +170,19 @@ void main() {
       expect((r as DecodeFailed).error, DecodeError.badValue);
     });
 
+    // Found by tool/fuzz.dart (RIN-18): Dart's UTF-8 decoder drops a
+    // leading U+FEFF as a byte-order mark, so such text didn't round-trip.
+    test('a leading U+FEFF is text, not a byte-order mark', () {
+      for (final text in ['﻿', '﻿a', '﻿﻿', 'a﻿']) {
+        final r = decodeMessage(
+          encodeMessage(TextMessage(4, text), sessionTag: tag),
+        );
+        expect(((r as Decoded).message as TextMessage).text, text);
+      }
+      final r = decodeMessage(hex('21 1011 04000000 0300 efbbbf'));
+      expect(((r as Decoded).message as TextMessage).text, '﻿');
+    });
+
     test('text over 1024 bytes is malformed', () {
       final bytes = Uint8List(9 + 1025)
         ..setAll(0, hex('21 1011 04000000 0104'));
