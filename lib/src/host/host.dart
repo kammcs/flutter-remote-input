@@ -65,8 +65,18 @@ final class RemoteInputHost {
   /// or crash handler. Synchronous, like [ControlSession.stop].
   static void stopAll() => stopSessionForAll(_live);
 
-  /// Why this host can't inject now, or `null` if it can.
-  HostUnavailableReason? checkAvailable() => _platform.checkAvailable();
+  /// Why this host can't inject now, or `null` if it can: what [enable]
+  /// would throw with the same [options].
+  ///
+  /// Without [options] (or with `allowElevatedHost` false), an elevated
+  /// Windows host reports [HostUnavailableReason.elevatedHost]. An app that
+  /// opts in passes the options it will enable with, and can call this
+  /// once without them to learn that the host is elevated, for a warning
+  /// in its UI: [HostUnavailableReason.elevatedHost] is reported only when
+  /// nothing else stops the host.
+  HostUnavailableReason? checkAvailable({
+    HostOptions options = const HostOptions(),
+  }) => _platform.checkAvailable(allowElevatedHost: options.allowElevatedHost);
 
   /// The host's displays, for [SharedSurface.display].
   Future<List<DisplayInfo>> displays() => _platform.surfaces.displays();
@@ -80,7 +90,10 @@ final class RemoteInputHost {
   /// Throws:
   /// - a [StateError] if a session is already live in this process (one at
   ///   a time in v1);
-  /// - a [HostUnavailableException] if the host can't inject now;
+  /// - a [HostUnavailableException] if the host can't inject now
+  ///   ([checkAvailable] with [options]), including
+  ///   [HostUnavailableReason.elevatedHost] for a Windows host run as
+  ///   administrator, unless [HostOptions.allowElevatedHost];
   /// - an [ArgumentError] if [surface] can't be found, or
   ///   [HostOptions.expiresAt] has passed.
   ControlSession enable({
@@ -91,7 +104,7 @@ final class RemoteInputHost {
     if (_live != null) {
       throw StateError('A control session is already live in this process');
     }
-    final unavailable = _platform.checkAvailable();
+    final unavailable = checkAvailable(options: options);
     if (unavailable != null) throw HostUnavailableException(unavailable);
     final session = createControlSession(
       platform: _platform,

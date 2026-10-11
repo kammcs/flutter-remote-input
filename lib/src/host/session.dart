@@ -834,6 +834,12 @@ final class ControlSession {
       usage = swapControlMetaUsage(usage);
       modifiers = swapControlMetaBits(modifiers);
     }
+    // System keys act on the whole machine (sleep, power, launch an app):
+    // dropped unless the app allows them. Never injected, so nothing is
+    // held, and their release has nothing to release.
+    if (!options.allowSystemKeys && KeyFilters.isSystemKey(usage)) {
+      return _drop(DropReason.systemKey);
+    }
     // Drift: release injected modifiers the viewer no longer reports.
     for (final held in _heldKeys.toList()) {
       final bit = HidModifier.bitOf(held);
@@ -855,7 +861,9 @@ final class ControlSession {
       return _drop(DropReason.tooManyKeys);
     }
     // Every press is filtered, repeats too: hotkeys fire on autorepeat.
-    if (!_filterAllows(usage, _heldKeys)) return _drop(DropReason.filtered);
+    if (!_filterAllows(usage, _heldKeys, modifiers)) {
+      return _drop(DropReason.filtered);
+    }
     if (!_keyboardAllowed()) return;
     final r = _inject(
       InputKind.keyboard,
@@ -870,7 +878,8 @@ final class ControlSession {
         // held: release any the filter rejects now, so their repeats can't
         // complete it (press R, then Win: no Win+R).
         for (final k in _heldKeys.toList()) {
-          if (!HidModifier.isModifier(k) && !_filterAllows(k, _heldKeys)) {
+          if (!HidModifier.isModifier(k) &&
+              !_filterAllows(k, _heldKeys, modifiers)) {
             _drop(DropReason.filtered);
             _releaseKey(k);
           }
@@ -879,15 +888,25 @@ final class ControlSession {
     }
   }
 
-  bool _filterAllows(int usage, Set<int> held) {
+  /// Whether the app's filter lets [usage] be pressed with [held] keys
+  /// held on the host and [modifiers] reported by the viewer (both after
+  /// mapping).
+  bool _filterAllows(int usage, Set<int> held, int modifiers) {
     final filter = options.keyFilter;
     if (filter == null) return true;
+    const bits =
+        KeyModifiers.shift |
+        KeyModifiers.control |
+        KeyModifiers.alt |
+        KeyModifiers.meta;
     return filter(
       KeyPress(
         usage: usage,
         heldModifiers: Set.unmodifiable(
           held.where((k) => k != usage && HidModifier.isModifier(k)),
         ),
+        modifiers: modifiers & bits,
+        hostPlatform: _platform.platform,
       ),
     );
   }

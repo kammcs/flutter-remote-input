@@ -201,6 +201,36 @@ void main() {
       expect(RemoteInputHost.activeSession, isNull);
     });
 
+    test('an elevated host is refused unless enabled with the opt-in '
+        '(RIN-44)', () {
+      final platform = FakeHostPlatform()
+        ..unavailable = HostUnavailableReason.elevatedHost;
+      final host = RemoteInputHost(platform: platform);
+      expect(
+        () => host.enable(
+          link: MemoryInputLink.pair().host,
+          surface: const SharedSurface.display(1),
+        ),
+        throwsA(
+          isA<HostUnavailableException>().having(
+            (e) => e.reason,
+            'reason',
+            HostUnavailableReason.elevatedHost,
+          ),
+        ),
+      );
+      const optIn = HostOptions(allowElevatedHost: true);
+      expect(host.checkAvailable(), HostUnavailableReason.elevatedHost);
+      expect(host.checkAvailable(options: optIn), isNull);
+      final session = host.enable(
+        link: MemoryInputLink.pair().host,
+        surface: const SharedSurface.display(1),
+        options: optIn,
+      );
+      expect(RemoteInputHost.activeSession, same(session));
+      session.stop();
+    });
+
     test('has no default platform yet', () {
       expect(RemoteInputHost.isSupported, isFalse);
       expect(RemoteInputHost.new, throwsA(isA<HostUnavailableException>()));

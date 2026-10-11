@@ -328,9 +328,13 @@ final class FakeHostPlatform implements HostPlatform {
   @override
   final FakeSecureContext secureContext;
 
-  /// What [checkAvailable] reports.
+  /// What [checkAvailable] reports. [HostUnavailableReason.elevatedHost]
+  /// is reported only without `allowElevatedHost`, as on Windows.
   HostUnavailableReason? unavailable;
 
   @override
-  HostUnavailableReason? checkAvailable() => unavailable;
+  HostUnavailableReason? checkAvailable({bool allowElevatedHost = false}) =>
+      allowElevatedHost && unavailable == HostUnavailableReason.elevatedHost
+      ? null
+      : unavailable;
 }
