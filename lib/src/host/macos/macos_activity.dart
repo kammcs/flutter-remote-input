@@ -87,6 +87,7 @@ final class MacosActivityDetector {
   Offset? _anchor;
   Offset? _injectedPoint;
   Duration? _lastLocalMove;
+  Duration? _lastNow;
   final ListQueue<(Duration, int)> _recentMoves = ListQueue();
   final List<ListQueue<(Duration, int)>> _pending = List.generate(
     5,
@@ -103,6 +104,7 @@ final class MacosActivityDetector {
     _anchor = null;
     _injectedPoint = null;
     _lastLocalMove = null;
+    _lastNow = null;
     _recentMoves.clear();
     for (final q in _pending) {
       q.clear();
@@ -113,6 +115,9 @@ final class MacosActivityDetector {
   /// input since the previous one. The first snapshot only sets the
   /// baseline.
   bool update(MacosActivitySnapshot snapshot, Duration now) {
+    final previous = _lastNow;
+    if (previous != null && now < previous) _rebase(previous - now);
+    _lastNow = now;
     final last = _last;
     _last = snapshot;
     if (last == null) {
@@ -163,6 +168,21 @@ final class MacosActivityDetector {
       _anchor = snapshot.pointer;
     }
     return false;
+  }
+
+  /// Moves every time kept [back], for a time source that went back: the
+  /// monitor's stopwatch follows the wall clock, which a time sync after
+  /// wake can set back. Without this, entries from "the future" would never
+  /// leave the windows, and jitter would add up across them.
+  void _rebase(Duration back) {
+    final lastMove = _lastLocalMove;
+    if (lastMove != null) _lastLocalMove = lastMove - back;
+    for (final q in [_recentMoves, ..._pending]) {
+      final kept = q.toList();
+      q
+        ..clear()
+        ..addAll([for (final (at, n) in kept) (at - back, n)]);
+    }
   }
 
   /// Records [moves] hardware moves seen at [now], and returns whether the

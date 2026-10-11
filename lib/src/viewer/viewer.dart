@@ -453,9 +453,10 @@ final class RemoteInputViewer {
     if (_moveTimer != null) return;
     final now = clock.now().microsecondsSinceEpoch;
     final last = _lastMoveMicros;
-    final wait = last == null
-        ? 0
-        : last + options.moveInterval.inMicroseconds - now;
+    final interval = options.moveInterval.inMicroseconds;
+    // Never more than one interval: the wall clock can go back (a time sync
+    // after wake), and a wait measured across that would stall the pointer.
+    final wait = last == null ? 0 : min(last + interval - now, interval);
     if (wait <= 0) {
       _flushMove();
     } else {

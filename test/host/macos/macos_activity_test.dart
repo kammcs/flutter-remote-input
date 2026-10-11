@@ -317,6 +317,21 @@ void main() {
     });
   });
 
+  test('a clock that goes back keeps the windows short (RIN-18)', () {
+    // The monitor's stopwatch follows the wall clock, which a time sync
+    // after wake can set back. Single jitter reports half a second apart
+    // must not add up to sustained movement across that.
+    const p = Offset(100, 100);
+    d.update(snap(pointer: p), ms(3600000));
+    expect(d.update(snap(moves: 1, pointer: p), ms(3600010)), isFalse);
+    expect(d.update(snap(moves: 2, pointer: p), ms(500)), isFalse);
+    expect(d.update(snap(moves: 3, pointer: p), ms(1000)), isFalse);
+    expect(d.update(snap(moves: 4, pointer: p), ms(1500)), isFalse);
+    // Real movement still counts.
+    expect(d.update(snap(moves: 6, pointer: p), ms(2000)), isFalse);
+    expect(d.update(snap(moves: 8, pointer: p), ms(2010)), isTrue);
+  });
+
   test('reset forgets the baseline', () {
     d.update(snap(), ms(0));
     d.reset();

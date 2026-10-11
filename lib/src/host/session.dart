@@ -476,6 +476,12 @@ final class ControlSession {
   void _onBytes(Uint8List bytes, {required bool fromReliable}) {
     if (_stopped) return;
     _received++;
+    if (_isPastExpiry()) {
+      // The expiry timer can fire late after the machine sleeps; the
+      // viewer's pings arrive every second, so this catches it first.
+      _stop(StopReason.expired);
+      return;
+    }
     if (bytes.length > limits.maxMessageBytes) {
       _violation(ViolationKind.oversized);
       return;
@@ -676,7 +682,11 @@ final class ControlSession {
     }
     final now = clock.now().microsecondsSinceEpoch;
     final last = _lastMoveMicros;
-    final wait = last == null ? 0 : last + _moveIntervalMicros - now;
+    // Never more than one interval: the wall clock can go back (a time sync
+    // after wake), and a wait measured across that would stall the pointer.
+    final wait = last == null
+        ? 0
+        : min(last + _moveIntervalMicros - now, _moveIntervalMicros);
     if (wait <= 0) {
       _applyMove();
     } else {
@@ -913,8 +923,7 @@ final class ControlSession {
   /// checked immediately before every OS call (`docs/design.md` §6.2).
   InjectResult? _inject(InputKind kind, InjectResult Function() call) {
     if (_stopped) return null;
-    final expiresAt = options.expiresAt;
-    if (expiresAt != null && !clock.now().isBefore(expiresAt)) {
+    if (_isPastExpiry()) {
       // The timer may fire late after the machine sleeps.
       _stop(StopReason.expired);
       return null;
@@ -935,6 +944,12 @@ final class ControlSession {
         _drop(DropReason.failed);
     }
     return r;
+  }
+
+  /// Whether [HostOptions.expiresAt] has passed by the wall clock.
+  bool _isPastExpiry() {
+    final expiresAt = options.expiresAt;
+    return expiresAt != null && !clock.now().isBefore(expiresAt);
   }
 
   // --- Surfaces and checks --------------------------------------------------

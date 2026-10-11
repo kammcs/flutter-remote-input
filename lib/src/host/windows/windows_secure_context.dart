@@ -61,7 +61,9 @@ final class WindowsSecureContextProbe implements SecureContextProbe {
   bool _isElevated(int pid) {
     final now = clock.now();
     final cached = _cache[pid];
-    if (cached != null && now.difference(cached.at) < cacheFor) {
+    final age = cached == null ? null : now.difference(cached.at);
+    // A negative age is a wall clock that went back: read it again.
+    if (cached != null && !age!.isNegative && age < cacheFor) {
       return cached.elevated;
     }
     final own = _own ??= _api.ownIntegrityLevel ?? IntegrityLevel.medium;
