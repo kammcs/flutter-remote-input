@@ -121,6 +121,7 @@ final class MacosActivitySnapshot {
     required this.hid,
     required this.own,
     required this.pointer,
+    this.pointerReadable = true,
   });
 
   /// The HID system's counts (`kCGEventSourceStateHIDSystemState`):
@@ -130,8 +131,13 @@ final class MacosActivitySnapshot {
   /// The counts of events this package posted.
   final MacosActivityCounts own;
 
-  /// Where the pointer is, in global display points.
+  /// Where the pointer is, in global display points. [Offset.zero] when
+  /// not [pointerReadable].
   final Offset pointer;
+
+  /// Whether the pointer's location could be read (RIN-45). Without it,
+  /// movement by distance can't be judged.
+  final bool pointerReadable;
 }
 
 /// The native calls the macOS host makes. All are synchronous.
@@ -216,4 +222,9 @@ abstract interface class MacosNative {
 
   /// A snapshot for the local-activity monitor.
   MacosActivitySnapshot activitySnapshot();
+
+  /// Keyboards and pointing devices removed since the native device watch
+  /// armed (the first call arms it), Bluetooth powering off included: a
+  /// counter that only grows. -1 if the watch couldn't arm (RIN-41).
+  int devicesLost();
 }

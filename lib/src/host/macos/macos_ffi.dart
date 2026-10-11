@@ -123,6 +123,9 @@ final class FfiMacosNative implements MacosNative {
       ),
       _snapshot = lib.lookupFunction<_SnapshotC, _Snapshot>(
         'remote_input_activity_snapshot',
+      ),
+      _devicesLost = lib.lookupFunction<_Int64C, _IntGet>(
+        'remote_input_devices_lost',
       );
 
   /// The native functions in this process, or `null` if the plugin's native
@@ -149,6 +152,7 @@ final class FfiMacosNative implements MacosNative {
   final _IntGet _secure;
   final _IntGet _session;
   final _Snapshot _snapshot;
+  final _IntGet _devicesLost;
 
   // Buffers live as long as the process: this object is a singleton
   // (macosHostPlatform()).
@@ -286,6 +290,9 @@ final class FfiMacosNative implements MacosNative {
   int sessionState() => _session();
 
   @override
+  int devicesLost() => _devicesLost();
+
+  @override
   MacosActivitySnapshot activitySnapshot() {
     final b = _small;
     _snapshot(b);
@@ -305,6 +312,7 @@ final class FfiMacosNative implements MacosNative {
         scrolls: b[10].toInt(),
         moves: b[11].toInt(),
       ),
+      pointerReadable: b[12] != 0,
     );
   }
 }

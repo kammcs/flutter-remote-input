@@ -32,12 +32,14 @@ let package = Package(
                 // https://developer.apple.com/documentation/xcode/bundling-resources-with-a-swift-package
             ],
             // CGEventPost and the window list (CoreGraphics), Secure Event
-            // Input (Carbon's HIToolbox) and NSWorkspace (AppKit).
+            // Input (Carbon's HIToolbox), NSWorkspace (AppKit) and the
+            // device watch (IOKit's registry notifications).
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("ApplicationServices"),
                 .linkedFramework("Carbon"),
                 .linkedFramework("CoreGraphics"),
+                .linkedFramework("IOKit"),
             ]
         )
     ]

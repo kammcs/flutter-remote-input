@@ -90,6 +90,40 @@ TEST(RemoteInputNative, ReasonCountsOnlyGrowAndRejectUnknownReasons) {
   EXPECT_GT(remote_input_activity_longest_gap(), 0u);
 }
 
+// RIN-41: keyboards and mice that go away (Bluetooth off) stop a session.
+TEST(RemoteInputNative, RemovedDevicesCountsHandlesThatAreGone) {
+  const uintptr_t before[] = {0x10, 0x20, 0x30};
+  // Nothing changed, in another order.
+  const uintptr_t same[] = {0x30, 0x10, 0x20};
+  EXPECT_EQ(remote_input::RemovedDevices(before, 3, same, 3), 0u);
+  // One went, one arrived: the count alone wouldn't show it.
+  const uintptr_t swapped[] = {0x10, 0x30, 0x40};
+  EXPECT_EQ(remote_input::RemovedDevices(before, 3, swapped, 3), 1u);
+  // Bluetooth off: the wireless keyboard and mouse both go.
+  const uintptr_t wired_only[] = {0x10};
+  EXPECT_EQ(remote_input::RemovedDevices(before, 3, wired_only, 1), 2u);
+  EXPECT_EQ(remote_input::RemovedDevices(before, 3, nullptr, 0), 3u);
+  // Arrivals don't count.
+  EXPECT_EQ(remote_input::RemovedDevices(nullptr, 0, before, 3), 0u);
+  EXPECT_EQ(remote_input::RemovedDevices(wired_only, 1, before, 3), 0u);
+}
+
+TEST(RemoteInputNative, DeviceCountersStartEmptyAndFollowTheThread) {
+  // Nothing was removed since the DLL loaded (no device is unplugged while
+  // the tests run).
+  EXPECT_EQ(remote_input_activity_devices_lost(), 0u);
+  EXPECT_EQ(remote_input_activity_input_devices(), -1);
+  ASSERT_EQ(remote_input_activity_start(), 1);
+  // The thread read the list when it started: a count, which may be 0 on a
+  // machine without a keyboard or mouse.
+  EXPECT_GE(remote_input_activity_input_devices(), 0);
+  Sleep(250);
+  EXPECT_EQ(remote_input_activity_devices_lost(), 0u);
+  remote_input_activity_stop();
+  EXPECT_EQ(remote_input_activity_input_devices(), -1);
+  EXPECT_EQ(remote_input_activity_devices_lost(), 0u);
+}
+
 TEST(RemoteInputNative, MoveOriginCountsRejectUnknownIndexes) {
   EXPECT_EQ(remote_input_activity_move_origin_count(-1), 0u);
   EXPECT_EQ(remote_input_activity_move_origin_count(8), 0u);

@@ -6,7 +6,8 @@
 // - The local-activity monitor (docs/design.md §6.3): low-level mouse and
 //   keyboard hooks on a dedicated thread with its own message loop, counting
 //   input the package didn't inject, with a heartbeat and periodic
-//   re-hooking so a hook Windows removed is noticed.
+//   re-hooking so a hook Windows removed is noticed, and a count of
+//   keyboards and mice removed (RIN-41).
 // - The tag every injected event carries in dwExtraInfo.
 
 #ifndef FLUTTER_PLUGIN_REMOTE_INPUT_NATIVE_H_
@@ -102,10 +103,31 @@ REMOTE_INPUT_NATIVE_EXPORT uint64_t remote_input_activity_largest_step(void);
 // hooks.
 REMOTE_INPUT_NATIVE_EXPORT int64_t remote_input_activity_heartbeat_age(void);
 
+// Keyboards and mice removed since the DLL loaded, Bluetooth powering off
+// included (RIN-41): the hook thread compares the raw input device list
+// (GetRawInputDeviceList) with its previous read on every heartbeat, and
+// counts each keyboard or mouse handle that's gone. Starts at 0 and only
+// grows. See CheckInputDevices in the .cpp for why it polls.
+REMOTE_INPUT_NATIVE_EXPORT uint64_t remote_input_activity_devices_lost(void);
+
+// How many keyboards and mice the hook thread's last read of the raw input
+// device list found, or -1 if it hasn't read one (no thread, or the list
+// couldn't be read). For diagnostics: a count, nothing else.
+REMOTE_INPUT_NATIVE_EXPORT int32_t remote_input_activity_input_devices(void);
+
 #if defined(__cplusplus)
 }  // extern "C"
 
+#include <stddef.h>
+
 namespace remote_input {
+
+// How many of the [before_count] device handles in [before] aren't among
+// the [after_count] in [after]: the devices removed between two reads of
+// the raw input device list. Neither needs to be sorted. Exposed for the
+// tests.
+size_t RemovedDevices(const uintptr_t* before, size_t before_count,
+                      const uintptr_t* after, size_t after_count);
 
 // Whether a stall of the hook thread hid input from the hooks: Windows'
 // last-input time [last_input] is more than a clock tick later than the

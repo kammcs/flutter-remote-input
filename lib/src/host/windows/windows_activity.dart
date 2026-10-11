@@ -30,8 +30,21 @@ import 'win32_api.dart';
 /// counts the stall if it hid input. While it's down, starting
 /// the hooks is retried every [retryInterval] (which restarts a hook thread
 /// that has exited).
+///
+/// **Lost devices (RIN-41).** The hook thread also counts keyboards and
+/// mice that leave the raw input device list (Bluetooth turned off, a
+/// receiver unplugged), read on every heartbeat. Each poll that sees the
+/// count grow emits on [devicesLost], and the session stops.
+///
+/// **Checked before each event (RIN-42).** [checkNow] reads the same two
+/// counters as a poll, with two leaf FFI calls that load atomics, so the
+/// session can ask before every injected event.
 final class WindowsLocalActivity
-    implements LocalActivityMonitor, LocalInputDiagnostics {
+    implements
+        LocalActivityMonitor,
+        LocalDeviceMonitor,
+        LocalActivityCheck,
+        LocalInputDiagnostics {
   /// Creates a monitor on [native].
   WindowsLocalActivity(
     this._native, {
@@ -56,10 +69,12 @@ final class WindowsLocalActivity
     onListen: _start,
     onCancel: _stop,
   );
+  final StreamController<void> _devices = StreamController.broadcast();
 
   Timer? _timer;
   Timer? _retry;
   int _last = 0;
+  int _lastDevicesLost = 0;
   bool _healthy = false;
   int _unhealthyPolls = 0;
   // Whether the hooks were out at some point since the monitor was last
@@ -69,6 +84,11 @@ final class WindowsLocalActivity
 
   @override
   Stream<void> get activity => _controller.stream;
+
+  /// Each poll that sees keyboards or mice removed since the last one
+  /// (RIN-41). Watched while [activity] has a listener.
+  @override
+  Stream<void> get devicesLost => _devices.stream;
 
   /// Whether the native hooks are being polled, are installed, and their
   /// thread's heartbeat is fresh. As of the last poll, so reading it costs
@@ -94,6 +114,7 @@ final class WindowsLocalActivity
 
   void _poll() {
     _last = _native.count();
+    _lastDevicesLost = _native.devicesLost();
     _healthy = _readHealth();
     _hooksWereOut = false;
     _unhealthyPolls = 0;
@@ -117,6 +138,9 @@ final class WindowsLocalActivity
       _last = c;
       local = true;
     }
+    final lost = _native.devicesLost();
+    final deviceLost = lost != _lastDevicesLost;
+    _lastDevicesLost = lost;
     _healthy = healthy;
     if (healthy) {
       _unhealthyPolls = 0;
@@ -126,6 +150,27 @@ final class WindowsLocalActivity
       _native.start();
     }
     if (local) _controller.add(null);
+    if (deviceLost) _devices.add(null);
+  }
+
+  /// Reads the counters now (RIN-42): local input or a removed device since
+  /// the last read counts, and is consumed. Health is left to the poll.
+  @override
+  bool checkNow() {
+    if (!isMonitoring) return false;
+    var local = false;
+    final c = _native.count();
+    if (c != _last) {
+      _last = c;
+      local = true;
+    }
+    final lost = _native.devicesLost();
+    if (lost != _lastDevicesLost) {
+      _lastDevicesLost = lost;
+      _devices.add(null);
+      local = true;
+    }
+    return local;
   }
 
   /// Whether the hooks are out: not installed, or no hook thread. A stale
@@ -154,7 +199,9 @@ final class WindowsLocalActivity
         '${i < 4 ? 'physical' : 'injected'}Move.${tags[i % 4]}': _native
             .moveOriginCount(i),
       'largestPhysicalStepPx': _native.largestPhysicalStepPx(),
-    }..removeWhere((_, v) => v == 0);
+      'devicesLost': _native.devicesLost(),
+      'inputDevices': _native.inputDevices(),
+    }..removeWhere((_, v) => v <= 0);
     return LocalInputCounts(
       counted: Map.unmodifiable(counted),
       stalls: n(NativeActivityReason.stall),

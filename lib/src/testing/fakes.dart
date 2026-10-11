@@ -195,14 +195,29 @@ final class RecordingInjector implements InputInjector {
   InjectResult text(String text) => _record(InjectedText(text));
 }
 
-/// A [LocalActivityMonitor] driven by the test.
-final class FakeLocalActivity implements LocalActivityMonitor {
+/// A [LocalActivityMonitor] driven by the test, with the optional
+/// [LocalDeviceMonitor] and [LocalActivityCheck].
+final class FakeLocalActivity
+    implements LocalActivityMonitor, LocalDeviceMonitor, LocalActivityCheck {
   final StreamController<void> _activity = StreamController.broadcast(
+    sync: true,
+  );
+  final StreamController<void> _devicesLost = StreamController.broadcast(
     sync: true,
   );
 
   @override
   Stream<void> get activity => _activity.stream;
+
+  @override
+  Stream<void> get devicesLost => _devicesLost.stream;
+
+  /// Reports a keyboard or pointing device removed, as if the viewer turned
+  /// the host's Bluetooth off (RIN-41). Only while [activity] is listened
+  /// to, as a platform monitor watches.
+  void simulateDeviceLost() {
+    if (_activity.hasListener) _devicesLost.add(null);
+  }
 
   /// Whether local input is detected: something listens, and [healthy].
   @override
@@ -214,6 +229,23 @@ final class FakeLocalActivity implements LocalActivityMonitor {
   /// Reports local input, as if the person at the host touched their mouse
   /// or keyboard.
   void simulateInput() => _activity.add(null);
+
+  /// Local input the counters show but the poll hasn't reported yet (RIN-42):
+  /// [checkNow] finds it, and nothing else reports it.
+  void simulateUnpolledInput() => _unpolled = true;
+
+  bool _unpolled = false;
+
+  /// How many times [checkNow] was called.
+  int checks = 0;
+
+  @override
+  bool checkNow() {
+    checks++;
+    if (!isMonitoring || !_unpolled) return false;
+    _unpolled = false;
+    return true;
+  }
 }
 
 /// A [SecureContextProbe] driven by the test.

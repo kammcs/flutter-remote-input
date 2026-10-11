@@ -17,6 +17,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstddef>
+#include <vector>
 
 // The INPUT layout lib/src/host/windows/input_records.dart writes.
 #if defined(_WIN64)
@@ -111,6 +112,39 @@ constexpr ULONGLONG kRehookMs = 15000;
 // resolution is about 16 ms.
 constexpr DWORD kSeenSlackMs = 16;
 
+// --- Lost input devices (RIN-41, docs/design.md §6.3) -----------------------
+//
+// A viewer controlling a display share can turn Bluetooth off (Win+A, the
+// quick settings) without admin rights. A presenter on a wireless keyboard
+// and mouse then has nothing to take control back with. So the session
+// stops when a keyboard or mouse goes away.
+//
+// The hook thread reads the raw input device list (GetRawInputDeviceList)
+// when it starts and on every heartbeat, keeps the keyboards' and mice's
+// handles, and counts each handle of the previous read that's gone. A
+// device that's removed and plugged back between two reads has a new
+// handle, so it still counts.
+//
+// Why poll rather than RegisterRawInputDevices with RIDEV_DEVNOTIFY and
+// WM_INPUT_DEVICE_CHANGE (GIDC_REMOVAL), which would see a removal at once:
+// - Raw input registration is per process and per usage: only the window
+//   of the last RegisterRawInputDevices call for keyboards (or mice) gets
+//   their raw input and notifications. Registering here would silently
+//   take raw input away from the host app or another plugin that uses it,
+//   and their registration, made later, would silently end ours.
+// - Registering also delivers WM_INPUT for every key and mouse move (with
+//   RIDEV_INPUTSINK, in the background too) to the hook thread, whose
+//   message loop must stay fast for the hooks.
+// - Both read the same device list, so they see the same removals. 100 ms
+//   is far inside what matters here: the alternative is control until the
+//   grant expires.
+// The list is kept across a restart of a hook thread that exited (so a
+// removal during the gap still counts) and dropped when monitoring stops.
+// If the list can't be read, that heartbeat is skipped.
+
+std::atomic<uint64_t> g_devices_lost{0};
+std::atomic<int32_t> g_input_devices{-1};
+
 std::atomic<uint64_t> g_count{0};
 
 // What each count was, for diagnostics: indexed by remote_input_activity_*
@@ -160,6 +194,11 @@ POINT g_previous = {0, 0};  // The previous mouse event's position.
 double g_path = 0;          // Physical travel in the current path, pixels.
 DWORD g_path_time = 0;      // GetTickCount() at its last physical move.
 DWORD g_last_seen = 0;      // The newest hooked event's time, tagged or not.
+
+// The keyboards' and mice's raw input handles at the last read, and whether
+// there was one. The hook thread's, and stop's once the thread has joined.
+std::vector<uintptr_t> g_devices;
+bool g_devices_known = false;
 
 // An address inside this module, for GetModuleHandleExW.
 const char kModuleAnchor = 0;
@@ -276,6 +315,51 @@ bool InstallHooks() {
   return true;
 }
 
+// Reads the raw input handles of the keyboards and mice now into [out].
+// False if the list can't be read. A device arriving between the two calls
+// makes the second fail with ERROR_INSUFFICIENT_BUFFER: read again.
+bool ReadInputDevices(std::vector<uintptr_t>* out) {
+  for (int attempt = 0; attempt < 3; attempt++) {
+    UINT count = 0;
+    if (GetRawInputDeviceList(nullptr, &count, sizeof(RAWINPUTDEVICELIST)) !=
+        0) {
+      return false;
+    }
+    std::vector<RAWINPUTDEVICELIST> list(count + 4);
+    UINT capacity = static_cast<UINT>(list.size());
+    const UINT got = GetRawInputDeviceList(list.data(), &capacity,
+                                           sizeof(RAWINPUTDEVICELIST));
+    if (got == static_cast<UINT>(-1)) {
+      if (GetLastError() == ERROR_INSUFFICIENT_BUFFER) continue;
+      return false;
+    }
+    out->clear();
+    for (UINT i = 0; i < got && i < list.size(); i++) {
+      if (list[i].dwType == RIM_TYPEKEYBOARD ||
+          list[i].dwType == RIM_TYPEMOUSE) {
+        out->push_back(reinterpret_cast<uintptr_t>(list[i].hDevice));
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+// Counts the keyboards and mice gone since the last read (RIN-41). Hook
+// thread only: at its start and on every heartbeat. One cheap system call.
+void CheckInputDevices() {
+  std::vector<uintptr_t> now;
+  if (!ReadInputDevices(&now)) return;
+  if (g_devices_known) {
+    const size_t removed = remote_input::RemovedDevices(
+        g_devices.data(), g_devices.size(), now.data(), now.size());
+    if (removed > 0) g_devices_lost.fetch_add(removed);
+  }
+  g_devices.swap(now);
+  g_devices_known = true;
+  g_input_devices.store(static_cast<int32_t>(g_devices.size()));
+}
+
 // The heartbeat timer's tick, on the hook thread.
 void OnHeartbeat() {
   const ULONGLONG now = GetTickCount64();
@@ -299,6 +383,7 @@ void OnHeartbeat() {
   if (stalled || !g_installed.load() || now - g_last_hooked >= kRehookMs) {
     InstallHooks();
   }
+  CheckInputDevices();
   g_heartbeat.store(now);
 }
 
@@ -319,6 +404,9 @@ DWORD WINAPI HookThread(LPVOID) {
   g_path_time = GetTickCount();
   // Input before monitoring started isn't unseen input.
   g_last_seen = GetTickCount();
+  // The devices now: a baseline, or (after a thread that exited on its own)
+  // the removals while it was gone.
+  CheckInputDevices();
 
   const bool hooked = InstallHooks();
   // A thread timer: WM_TIMER with a null hwnd, handled in the loop below.
@@ -361,6 +449,20 @@ void JoinThread() {
 }  // namespace
 
 namespace remote_input {
+
+size_t RemovedDevices(const uintptr_t* before, size_t before_count,
+                      const uintptr_t* after, size_t after_count) {
+  if (before == nullptr) return 0;
+  size_t removed = 0;
+  for (size_t i = 0; i < before_count; i++) {
+    bool found = false;
+    for (size_t j = 0; after != nullptr && j < after_count && !found; j++) {
+      found = after[j] == before[i];
+    }
+    if (!found) removed++;
+  }
+  return removed;
+}
 
 bool StallMissedInput(bool last_input_known, uint32_t last_input,
                       uint32_t last_seen) {
@@ -437,6 +539,11 @@ void remote_input_activity_stop(void) {
     PostThreadMessageW(g_thread_id, WM_QUIT, 0, 0);
     JoinThread();
   }
+  // No thread now: the next start reads a fresh baseline, so a device
+  // removed while nothing was monitored doesn't count.
+  g_devices.clear();
+  g_devices_known = false;
+  g_input_devices.store(-1);
   ReleaseSRWLockExclusive(&g_lock);
 }
 
@@ -471,4 +578,12 @@ uint64_t remote_input_activity_move_origin_count(int32_t index) {
 
 uint64_t remote_input_activity_largest_step(void) {
   return g_largest_step.load();
+}
+
+uint64_t remote_input_activity_devices_lost(void) {
+  return g_devices_lost.load();
+}
+
+int32_t remote_input_activity_input_devices(void) {
+  return g_input_devices.load();
 }

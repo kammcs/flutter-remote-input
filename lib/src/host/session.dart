@@ -279,9 +279,16 @@ final class ControlSession {
       );
     }
     _subscriptions.add(reliable.openChanges.listen(_onOpenChanged));
-    final activity = _platform.localActivity?.activity;
-    if (activity != null) {
-      _subscriptions.add(activity.listen((_) => _onLocalActivity()));
+    final monitor = _platform.localActivity;
+    if (monitor != null) {
+      _subscriptions.add(monitor.activity.listen((_) => _onLocalActivity()));
+      if (monitor case final LocalDeviceMonitor devices) {
+        // RIN-41: a removed keyboard or mouse (Bluetooth turned off by the
+        // viewer, say) may be how the presenter would take control back.
+        _subscriptions.add(
+          devices.devicesLost.listen((_) => _stop(StopReason.localDeviceLost)),
+        );
+      }
     }
     if (reliable.isOpen) _onOpenChanged(true);
   }
@@ -792,6 +799,7 @@ final class ControlSession {
         down: m.down,
         clickCount: max(1, m.clickCount),
       ),
+      release: !m.down,
     );
     if (m.down) {
       if (r == InjectResult.injected) _heldButtons.add(m.button);
@@ -952,14 +960,20 @@ final class ControlSession {
   }
 
   /// Calls the injector, unless the session has stopped: the stop flag is
-  /// checked immediately before every OS call (`docs/design.md` §6.2).
-  InjectResult? _inject(InputKind kind, InjectResult Function() call) {
+  /// checked immediately before every OS call (`docs/design.md` §6.2). So
+  /// is local input, unless [release] (RIN-42).
+  InjectResult? _inject(
+    InputKind kind,
+    InjectResult Function() call, {
+    bool release = false,
+  }) {
     if (_stopped) return null;
     if (_isPastExpiry()) {
       // The timer may fire late after the machine sleeps.
       _stop(StopReason.expired);
       return null;
     }
+    if (!release && _localInputNow()) return null;
     final r = call();
     switch (r) {
       case InjectResult.injected:
@@ -982,6 +996,23 @@ final class ControlSession {
   bool _isPastExpiry() {
     final expiresAt = options.expiresAt;
     return expiresAt != null && !clock.now().isBefore(expiresAt);
+  }
+
+  /// Asks the monitor, synchronously, whether there was local input since
+  /// its last read (RIN-42, `docs/design.md` §6.3). If so, the event about
+  /// to be injected is dropped and the session pauses as it would at the
+  /// next poll. Releases don't come here: they always go through.
+  bool _localInputNow() {
+    final local = switch (_platform.localActivity) {
+      final LocalActivityCheck check => check.checkNow(),
+      _ => false,
+    };
+    if (!local) return false;
+    _drop(DropReason.inactive);
+    // A lost device stops the session when its event arrives; local input
+    // already counts until then.
+    if (!_stopped) _onLocalActivity();
+    return true;
   }
 
   // --- Surfaces and checks --------------------------------------------------

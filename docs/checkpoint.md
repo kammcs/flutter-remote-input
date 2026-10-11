@@ -236,6 +236,11 @@ Built and unit-tested on macOS; the native C++ is compile-checked with mingw-w64
 
 10. **An elevated host is refused (RIN-44).** Right-click the example's `.exe` (or a terminal for `flutter run`) → **Run as administrator**, and choose **Host this computer**: it shows "This computer can't be controlled now" with the administrator message, and nothing listens. In Task Manager's Details tab (add the **Elevated** column) the example shows Yes. Run it normally: the display picker appears. **With the opt-in** (`HostOptions(allowElevatedHost: true)`; the example has no switch for it, so add the option to the `enable` call in `_onRequest` in a local build, not committed): an elevated host pairs, and from the viewer Ctrl+Shift+Esc opens Task Manager, which the viewer can then click and type into (at the host's level), while a UAC prompt still blocks with `secureDesktop`. Run normally, the same Task Manager blocks the viewer (`elevatedTarget`).
 
+11. **Lost devices (RIN-41):** share a display and pair from a second machine. The viewer opens the quick settings (Win+A) and turns Bluetooth off. Run it **with a Bluetooth LE keyboard or mouse** (most current ones, and every "Swift Pair" device) and, if you have one, **again with a classic Bluetooth one**. To tell them apart: Device Manager → View → Devices by connection; an LE device sits under "Microsoft Bluetooth LE Enumerator", a classic one under "Microsoft Bluetooth Enumerator".
+   - **Before the fix** (a commit before RIN-41): control goes on, and the presenter's wireless keyboard and mouse no longer pause it. Record it.
+   - **After:** the session stops at once with `localDeviceLost` (host: "Stopped: a keyboard or mouse was disconnected"), and `SessionStats.localInput.details` shows `devicesLost` grow and `inputDevices` drop. Repeat by unplugging a USB mouse's receiver. Plugging a device in doesn't stop anything.
+   - **The open point (design §6.3, verify):** if the LE device doesn't stop the session, record `inputDevices` before and after turning Bluetooth off. Unchanged means Windows keeps a disconnected LE device in its raw input list, and RIN-41 needs a radio-state signal on Windows.
+
 ### C2. macOS: the Accessibility grant and the injection test
 
 Only when the machine is free: the test moves the real pointer and types real keys, into its own window only.
@@ -254,6 +259,14 @@ Only when the machine is free: the test moves the real pointer and types real ke
    - *Block system shortcuts* (`KeyFilters.windowShare`): Ctrl+Cmd+Q doesn't lock, and from the viewer's keyboard Cmd+Tab (Ctrl+Tab from a Windows viewer), Cmd+Space, Cmd+Option+Esc, Cmd+Shift+Q, Ctrl+Up and Ctrl+F3 do nothing. Cmd+C, Cmd+V, Cmd+Z, Cmd+A (Ctrl+ from a Windows viewer), Cmd+Q in a throwaway app, Shift letters and Escape still work, and nothing stays held.
    - *Allow system keys:* note whether an injected Fn acts as the Globe key (design §6.4 assumes it may), and whether Fn Fn starts dictation.
 
+10. **Lost devices (RIN-41):** with a Bluetooth keyboard, mouse or trackpad connected, share a display and pair from a second machine. The viewer opens Control Center and turns Bluetooth off.
+   - **Before the fix** (a commit before RIN-41): control goes on, and the presenter's wireless devices no longer pause it. Record it.
+   - **After:** the session stops at once with `localDeviceLost`. No Input Monitoring prompt appears, and the app doesn't appear under System Settings → Privacy & Security → Input Monitoring. Repeat by unplugging a USB mouse; plugging one in stops nothing.
+11. **Counter health (RIN-45):** the host page's stats line shows `LocalInputCounts(…)` (counts only).
+    - **Stays healthy:** share a display and pair. The viewer moves in circles for 30 s and types; then the presenter moves their own mouse and trackpad, slowly and fast, across every display, while the viewer is idle; then both at once. Unplug or rearrange a display (System Settings → Displays) during a session. Expected: never `SessionBlocked(localInputUnmonitored)`; the presenter's movement pauses as in step 7; `staleCounterTrips` stays absent (0). A few `unexplainedPointerMoves` are fine; record the count.
+    - **Fails closed:** run another tool that moves the pointer without the mouse while a session is active, for example `swift -e 'import CoreGraphics; for i in 0..<20 { CGWarpMouseCursorPosition(CGPoint(x: 200 + i * 30, y: 300)); usleep(50_000) }'` in Terminal (it needs no permission). Expected: `SessionBlocked(localInputUnmonitored)` within about 20 ms of the second warp, `staleCounterTrips: 1`, the viewer's input dropped; then moving the presenter's own mouse: `SessionPaused(localInput)` once, then `SessionActive` about 1.5 s later.
+    - **Bad sign:** `localInputUnmonitored` with nothing but the presenter's own mouse or trackpad moving means the HID counters don't see that device: record the device, its driver software (Logitech Options+, SteerMouse, a tablet driver) and `staleCounterTrips`.
+
 ### C3. macOS: the App Sandbox test (design §7.3, open question 1)
 
 Preparation: open `example/macos/Runner.xcworkspace`; on the Runner target set your Team (Apple Development certificate) and add **Hardened Runtime**; leave App Sandbox on (both entitlements files are sandboxed). **Don't commit the team ID.** Then `cd example && flutter build macos --release -t lib/macos_check.dart`, check `codesign -dv --entitlements - build/macos/Build/Products/Release/remote_input_example.app` shows `flags=0x10000(runtime)`, `app-sandbox` true and an Apple Development authority, and remove old `remote_input_example` entries from the Accessibility list. Record the macOS build and each result:
@@ -263,7 +276,9 @@ Preparation: open `example/macos/Runner.xcworkspace`; on the Runner target set y
 3. **Bounds, frontmost app, secure input and session can be read:** **Type into this window** and click the page's field: the text arrives. Repeat but switch apps during the countdown: the log shows `dropped {notFocused: …}`. Click the page's password field, press the button and click the field again: `SessionBlocked(secureInput)` (if Flutter's obscured field doesn't turn on Secure Event Input, use Terminal → Secure Keyboard Entry with Terminal in front). **Circle**, lock with Ctrl-Cmd-Q, unlock: `SessionBlocked(sessionInactive)`. With **Type into this window** running, press Cmd+Space during the countdown: keys are blocked (`windowNotInFront`) while Spotlight is open, and resume after Esc.
 4. **Local input wins:** **Circle for 8 s**, nudge the mouse once: `SessionPaused(localInput)`, the circle stops, then `SessionActive` about 1.5 s after you let go. A key pauses it too. No pause while you don't touch anything.
 5. **Spotlight probe (read-only):** `sleep 5; swift tool/macos/spotlight_probe.swift` in Terminal, and press Cmd+Space within 5 s. Record Spotlight's window layer, and confirm the frontmost app stays Terminal. Run it again after Esc: no Spotlight window lines.
-6. **Without the sandbox, for comparison:** remove App Sandbox locally, rebuild, re-grant if asked, repeat 1–5.
+6. **Lost devices, sandboxed (RIN-41):** with **Circle for 8 s** running and a Bluetooth keyboard, mouse or trackpad connected, turn Bluetooth off in Control Center (or unplug a USB mouse): `SessionStopped(localDeviceLost)` at once. The session must not start as `SessionBlocked(localInputUnmonitored)`: that would mean the device watch couldn't arm in the sandbox. No Input Monitoring prompt appears, and the app isn't listed under Privacy & Security → Input Monitoring.
+7. **Counter health, sandboxed (RIN-45):** this is the check that the HID counters see the hardware under the App Sandbox. With **Circle for 8 s** running, move your own mouse or trackpad: `SessionPaused(localInput)`, not `SessionBlocked(localInputUnmonitored)`; the log line after each script shows `LocalInputCounts(…)` without `staleCounterTrips`. Then run the `CGWarpMouseCursorPosition` command from C2.11 during **Circle for 8 s**: `SessionBlocked(localInputUnmonitored)` and `staleCounterTrips: 1` in the log (failing closed); move your mouse to recover. If the first part blocks instead of pausing, the sandbox hides hardware input from the counters: record it, since local input wins can't work sandboxed then.
+8. **Without the sandbox, for comparison:** remove App Sandbox locally, rebuild, re-grant if asked, repeat 1–7.
 
 The answer goes into [design.md §7.3](design.md#73-macos), the README's macOS section, and to the first consumer.
 
@@ -282,6 +297,15 @@ Fill in one row per run. Result: pass, fail, or n/a with a reason.
 | C2.9 System keys, shortcuts (RIN-43): `windowShare` | → macOS | | | | | Ctrl+Cmd+Q, Cmd+Tab, Cmd+Space dropped; Cmd+C/V work; Fn with allowSystemKeys: |
 | C1.10 Elevated host refused (RIN-44) | → Windows | | | | | Run as administrator: refused; normal start: available |
 | C1.10 Elevated host, opt-in (RIN-44) | → Windows | | | | | Task Manager driven at High; UAC still `secureDesktop` |
+| C1.11 Bluetooth off, before RIN-41 | macOS → Windows (display share) | | | | | expected: control goes on |
+| C1.11 Bluetooth off, after RIN-41, LE device | macOS → Windows (display share) | | | | | expected: `stopped(localDeviceLost)`; record `inputDevices` before and after (design §6.3, verify) |
+| C1.11 Bluetooth off, after RIN-41, classic device | macOS → Windows (display share) | | | | | expected: `stopped(localDeviceLost)`; n/a without one |
+| C2.10 Bluetooth off, before RIN-41 | Windows → macOS (display share) | | | | | expected: control goes on |
+| C2.10 Bluetooth off, after RIN-41 | Windows → macOS (display share) | | | | | expected: `stopped(localDeviceLost)`, no Input Monitoring prompt |
+| C2.11 Counter health, stays healthy | Windows → macOS (display share) | | | | | expected: never `localInputUnmonitored`; record `unexplainedPointerMoves` |
+| C2.11 Counter health, fails closed | Windows → macOS (display share) | | | | | expected: blocked after a pointer warp, `staleCounterTrips: 1`, recovers on a mouse move |
+| C3.6 Lost devices, sandboxed | macOS | | | | | expected: `stopped(localDeviceLost)`, no Input Monitoring prompt |
+| C3.7 Counter health, sandboxed | macOS | | | | | expected: own mouse pauses (healthy); a warp blocks (fails closed) |
 | A1 Pointer | Windows → macOS | | | | | |
 | A1 Pointer | macOS → Windows | | | | | |
 | A2 Keys | Windows → macOS | | | | | |

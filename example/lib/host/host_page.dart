@@ -665,6 +665,9 @@ class _ControlBanner extends StatelessWidget {
                   'injected ${stats.injected}',
                   'dropped ${stats.totalDropped}',
                   'violations ${stats.totalViolations}',
+                  // Counts only (RIN-41, RIN-45): what the local-input
+                  // monitor saw, and its health.
+                  if (stats.localInput case final local?) '$local',
                 ].join('  ·  '),
                 style: theme.textTheme.bodySmall?.copyWith(color: foreground),
               ),

@@ -10,6 +10,7 @@ import 'package:clock/clock.dart';
 import '../../keys.dart';
 import '../../protocol/wire_types.dart';
 import '../../surface.dart';
+import '../host_types.dart';
 import '../platform.dart';
 import 'macos_activity.dart';
 import 'macos_events.dart';
@@ -485,21 +486,50 @@ final class MacosSecureContext implements SecureContextProbe {
 /// Local input on macOS, by polling the HID system's event counters while
 /// [activity] has a listener (`docs/design.md` §6.3; see
 /// [MacosActivityDetector]).
-final class MacosLocalActivity implements LocalActivityMonitor {
-  // The HID counters are always readable.
-  @override
-  bool get isMonitoring => true;
-
+///
+/// **Health (RIN-45).** [isMonitoring] is true only while the counters are
+/// polled and every input to them is sound, so a monitor that can't see
+/// local input blocks injection rather than failing open:
+/// - the device watch armed (RIN-41);
+/// - the pointer's location could be read at the last poll;
+/// - the HID counters are live: not all zero (a session that has seen no
+///   input at all since boot reads all zeros only until the first one);
+/// - they aren't frozen ([MacosCounterHealth]): the pointer didn't keep
+///   moving, unexplained, while the HID move counter stayed flat.
+///
+/// When the monitor recovers from being unhealthy, it emits once, since
+/// input in the gap may have gone unseen (as on Windows). A poll that's
+/// only late doesn't make it unhealthy: under load that would block
+/// sessions with nobody at the machine (RIN-39's lesson), and [checkNow]
+/// covers keys, buttons and scrolls between polls.
+///
+/// **Lost devices (RIN-41).** Each poll also reads the native device
+/// watch's count of keyboards and pointing devices removed (I/O Registry
+/// notifications, no permission), and emits on [devicesLost] when it grew.
+///
+/// **Checked before each event (RIN-42).** [checkNow] reads the device
+/// count and a snapshot, and counts a hardware key, modifier, button or
+/// scroll since the last read. Movement is left to the poll, whose rules
+/// need its timing ([MacosActivityDetector.checkDiscrete]).
+final class MacosLocalActivity
+    implements
+        LocalActivityMonitor,
+        LocalDeviceMonitor,
+        LocalActivityCheck,
+        LocalInputDiagnostics {
   /// Creates a monitor over [native], polling every [pollInterval] (10 ms,
   /// for a pause within the 100 ms target).
   MacosLocalActivity(
     this._native, {
     this.pollInterval = const Duration(milliseconds: 10),
     MacosActivityDetector? detector,
-  }) : _detector = detector ?? MacosActivityDetector();
+    MacosCounterHealth? health,
+  }) : _detector = detector ?? MacosActivityDetector(),
+       _health = health ?? MacosCounterHealth();
 
   final MacosNative _native;
   final MacosActivityDetector _detector;
+  final MacosCounterHealth _health;
 
   /// How often the counters are read.
   final Duration pollInterval;
@@ -508,20 +538,48 @@ final class MacosLocalActivity implements LocalActivityMonitor {
     onListen: _start,
     onCancel: _stop,
   );
+  final StreamController<void> _devices = StreamController.broadcast();
   Timer? _timer;
   Stopwatch? _watch;
+  int _devicesLost = -1;
+  bool _pointerReadable = false;
+  bool _countersLive = false;
+  bool _healthy = false;
+  Duration? _lastPoll;
+
+  // Diagnostics: counts only.
+  int _monitorGaps = 0;
+  int _unreadablePolls = 0;
+  int _longestGapMs = 0;
 
   @override
   Stream<void> get activity => _controller.stream;
 
+  /// Each poll that sees keyboards or pointing devices removed since the
+  /// last one (RIN-41). Watched while [activity] has a listener.
+  @override
+  Stream<void> get devicesLost => _devices.stream;
+
+  /// Whether the counters are being polled and were sound at the last poll
+  /// (see the class comment). As of the last poll, so reading it costs
+  /// nothing.
+  @override
+  bool get isMonitoring => _timer != null && _healthy;
+
   /// Tells the monitor the package put the pointer at [point].
-  void noteInjectedPointer(Offset point) =>
-      _detector.noteInjectedPointer(point);
+  void noteInjectedPointer(Offset point) {
+    _detector.noteInjectedPointer(point);
+    _health.noteInjectedPointer(point);
+  }
 
   void _start() {
     _detector.reset();
+    _health.reset();
     _watch = clock.stopwatch()..start();
-    _poll();
+    _lastPoll = null;
+    // A baseline: removals before monitoring started don't count.
+    _devicesLost = _native.devicesLost();
+    _poll(starting: true);
     _timer = Timer.periodic(pollInterval, (_) => _poll());
   }
 
@@ -529,14 +587,92 @@ final class MacosLocalActivity implements LocalActivityMonitor {
     _timer?.cancel();
     _timer = null;
     _watch = null;
+    _devicesLost = -1;
+    _healthy = false;
     _detector.reset();
+    _health.reset();
   }
 
-  void _poll() {
+  /// Reads the device count and the counters now (RIN-42). A removed device
+  /// or a hardware key, modifier, button or scroll since the last read
+  /// counts, and is consumed.
+  @override
+  bool checkNow() {
+    if (!isMonitoring) return false;
+    if (_readDevices()) return true;
+    return _detector.checkDiscrete(_native.activitySnapshot());
+  }
+
+  /// Reads the device watch's count, and emits on [devicesLost] if it grew.
+  /// Returns whether it did.
+  bool _readDevices() {
+    final lost = _native.devicesLost();
+    final deviceLost = lost >= 0 && _devicesLost >= 0 && lost != _devicesLost;
+    _devicesLost = lost;
+    if (deviceLost) _devices.add(null);
+    return deviceLost;
+  }
+
+  void _poll({bool starting = false}) {
     final watch = _watch;
     if (watch == null) return;
-    if (_detector.update(_native.activitySnapshot(), watch.elapsed)) {
-      _controller.add(null);
+    final now = watch.elapsed;
+    final lastPoll = _lastPoll;
+    if (lastPoll != null) {
+      final gap = (now - lastPoll).inMilliseconds;
+      if (gap > _longestGapMs) _longestGapMs = gap;
     }
+    _lastPoll = now;
+
+    _readDevices();
+    final snapshot = _native.activitySnapshot();
+    _pointerReadable = snapshot.pointerReadable;
+    if (!_pointerReadable) _unreadablePolls++;
+    final hid = snapshot.hid;
+    _countersLive =
+        _countersLive ||
+        hid.keyDowns != 0 ||
+        hid.flagsChanged != 0 ||
+        hid.buttonDowns != 0 ||
+        hid.scrolls != 0 ||
+        hid.moves != 0;
+    _health.update(snapshot, _native.displayGeneration(), now);
+
+    final wasHealthy = _healthy;
+    _healthy =
+        _devicesLost >= 0 &&
+        _pointerReadable &&
+        _countersLive &&
+        !_health.countersStale;
+    if (!_healthy) {
+      // Nothing is judged from an unsound snapshot; the detector takes a
+      // new baseline when the monitor recovers.
+      _detector.reset();
+      return;
+    }
+    var local = _detector.update(snapshot, now);
+    if (!wasHealthy && !starting) {
+      // Back after a gap whose input may have gone unseen.
+      _monitorGaps++;
+      local = true;
+    }
+    if (local) _controller.add(null);
   }
+
+  @override
+  LocalInputCounts get localInputCounts => LocalInputCounts(
+    counted: Map.unmodifiable({
+      if (_monitorGaps > 0) LocalInputSource.monitorGap: _monitorGaps,
+    }),
+    stalls: 0,
+    longestGapMs: _longestGapMs,
+    details: Map.unmodifiable(
+      {
+        'staleCounterTrips': _health.trips,
+        'unexplainedPointerMoves': _health.unexplainedMoves,
+        'pointerUnreadablePolls': _unreadablePolls,
+        'devicesLost': _devicesLost,
+      }..removeWhere((_, v) => v <= 0),
+    ),
+  );
 }

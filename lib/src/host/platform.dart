@@ -144,6 +144,47 @@ abstract interface class LocalActivityMonitor {
   bool get isMonitoring;
 }
 
+/// A [LocalActivityMonitor] that can be asked, synchronously, whether there
+/// was local input just now (`docs/design.md` §6.3, RIN-42). A separate
+/// interface, so monitors without it still implement [LocalActivityMonitor]
+/// alone.
+///
+/// The session calls [checkNow] immediately before every OS call that
+/// injects (releases excepted). The poll behind
+/// [LocalActivityMonitor.activity] only runs between events, so without it
+/// a queued burst of keys, text or wheel events, or a UI isolate running
+/// late, could land after the presenter took over.
+abstract interface class LocalActivityCheck {
+  /// Reads the platform's counters now and returns whether there was local
+  /// input since the last read, by this call or the monitor's poll. What
+  /// it finds is consumed: [LocalActivityMonitor.activity] doesn't report
+  /// it again. A removed device it finds is reported on
+  /// [LocalDeviceMonitor.devicesLost] too, and counts as local input.
+  ///
+  /// Called before every injected event, so it must cost microseconds and
+  /// never block. False while the monitor isn't monitoring.
+  bool checkNow();
+}
+
+/// A [LocalActivityMonitor] that also sees the host's keyboards and
+/// pointing devices go away (`docs/design.md` §6.3, RIN-41). A separate
+/// interface, so monitors without it still implement [LocalActivityMonitor]
+/// alone.
+///
+/// A viewer controlling a display share can turn the presenter's Bluetooth
+/// off (Control Center, the Windows quick settings) without any permission.
+/// A presenter on a wireless keyboard and mouse then loses local input
+/// wins, the app's revoke hotkey and its Stop button. So a session whose
+/// monitor implements this stops with `StopReason.localDeviceLost` at the
+/// first removal.
+abstract interface class LocalDeviceMonitor {
+  /// An event for each keyboard, mouse, trackpad or other pointing device
+  /// removed or disconnected, Bluetooth powering off included. Watched
+  /// while [LocalActivityMonitor.activity] has a listener: a removal before
+  /// that doesn't count.
+  Stream<void> get devicesLost;
+}
+
 /// A [LocalActivityMonitor] that can say why it reported local input. A
 /// separate interface, so monitors without it still implement
 /// [LocalActivityMonitor] alone.

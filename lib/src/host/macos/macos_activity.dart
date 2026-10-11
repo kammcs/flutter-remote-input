@@ -185,6 +185,35 @@ final class MacosActivityDetector {
     }
   }
 
+  /// Whether [snapshot], read between polls, shows a hardware key down, a
+  /// modifier change, a button down or a scroll since the last snapshot
+  /// (RIN-42). Those are local input on their own, so they're checked
+  /// before every injected event. If there is one, it's consumed: those
+  /// counts in the baseline move on, and the movement state is kept, so
+  /// movement is still judged by [update] at the poll's cadence. False
+  /// before the first snapshot, and with [ownEventsReachHidState], whose
+  /// subtraction needs the poll's timing.
+  bool checkDiscrete(MacosActivitySnapshot snapshot) {
+    final last = _last;
+    if (last == null || ownEventsReachHidState) return false;
+    final hid = _deltas(snapshot.hid, last.hid);
+    if (hid[0] + hid[1] + hid[2] + hid[3] == 0) return false;
+    MacosActivityCounts keepMoves(MacosActivityCounts now, int moves) =>
+        MacosActivityCounts(
+          keyDowns: now.keyDowns,
+          flagsChanged: now.flagsChanged,
+          buttonDowns: now.buttonDowns,
+          scrolls: now.scrolls,
+          moves: moves,
+        );
+    _last = MacosActivitySnapshot(
+      hid: keepMoves(snapshot.hid, last.hid.moves),
+      own: keepMoves(snapshot.own, last.own.moves),
+      pointer: last.pointer,
+    );
+    return true;
+  }
+
   /// Records [moves] hardware moves seen at [now], and returns whether the
   /// moves within [moveWindow] are sustained movement.
   bool _noteMoves(int moves, Duration now) {
@@ -227,6 +256,165 @@ final class MacosActivityDetector {
     _wrap(a.scrolls - b.scrolls),
     _wrap(a.moves - b.moves),
   ];
+
+  static int _wrap(int delta) => delta & 0xFFFFFFFF;
+}
+
+/// Whether the HID system's counters still see the hardware (RIN-45,
+/// `docs/design.md` §6.3): pure logic over polled snapshots, so it's
+/// unit-tested on any OS.
+///
+/// Local input wins on macOS rests on those counters
+/// ([MacosActivityDetector]). If they stopped moving for physical input (a
+/// macOS change, the App Sandbox, a session state never seen), the monitor
+/// would see nothing and fail open, silently. Counters that read zero are
+/// easy to spot; counters that are non-zero but frozen are the real
+/// failure. So each poll compares two things that should agree: where the
+/// pointer is, and the HID move counter.
+///
+/// **The rule.** The pointer moved more than [jumpThreshold] points since
+/// the last poll, the HID move counter didn't advance, and nothing
+/// explains it. Explained are:
+/// - **the package's own posts:** its own event counters advanced since the
+///   last poll, or the pointer is within [injectedSlack] of where the
+///   package last put it (a post the counters showed a poll earlier). The
+///   package's events never reach the HID counters, so without this every
+///   viewer move would look like a frozen counter;
+/// - **a display reconfiguration:** the display generation changed within
+///   [reconfigurationGrace], which may move the pointer onto a display that
+///   remains.
+///
+/// One such sample could be a race (an event counted after the counters
+/// were read, but before the pointer was), so it takes [strikes] of them
+/// within [window], with no HID movement between. Then [countersStale] is
+/// true until the counter advances again, which takes a physical move.
+///
+/// **False positives, accepted (fail closed):** other software that moves
+/// the pointer without HID events (another remote-control tool, an app
+/// that warps it) looks the same; the session is then blocked until the
+/// presenter moves their own mouse.
+final class MacosCounterHealth {
+  /// Creates a health check.
+  MacosCounterHealth({
+    this.jumpThreshold = 4,
+    this.injectedSlack = 2,
+    this.strikes = 2,
+    this.window = const Duration(seconds: 1),
+    this.reconfigurationGrace = const Duration(milliseconds: 500),
+  });
+
+  /// How far, in points, the pointer must move between two polls to need
+  /// explaining.
+  final double jumpThreshold;
+
+  /// How close, in points, the pointer must be to where the package last
+  /// put it for that to explain it.
+  final double injectedSlack;
+
+  /// How many unexplained moves within [window] make the counters stale.
+  final int strikes;
+
+  /// The window [strikes] are counted in.
+  final Duration window;
+
+  /// How long after a display reconfiguration a pointer jump is explained.
+  final Duration reconfigurationGrace;
+
+  MacosActivitySnapshot? _last;
+  Offset? _injectedPoint;
+  int? _generation;
+  Duration? _reconfiguredAt;
+  final ListQueue<Duration> _unexplained = ListQueue();
+  bool _stale = false;
+  int _trips = 0;
+  int _unexplainedMoves = 0;
+
+  /// Whether the HID counters look frozen: [strikes] unexplained pointer
+  /// moves, and no HID move since.
+  bool get countersStale => _stale;
+
+  /// How many times the counters were judged stale, for diagnostics.
+  int get trips => _trips;
+
+  /// Pointer moves seen without HID moves or an explanation, for
+  /// diagnostics.
+  int get unexplainedMoves => _unexplainedMoves;
+
+  /// Tells the check the package put the pointer at [point].
+  void noteInjectedPointer(Offset point) => _injectedPoint = point;
+
+  /// Forgets the previous snapshot and any strikes, for when monitoring
+  /// stops or the pointer couldn't be read. A stale verdict stays until a
+  /// HID move clears it.
+  void reset() {
+    _last = null;
+    _generation = null;
+    _reconfiguredAt = null;
+    _unexplained.clear();
+  }
+
+  /// Takes the snapshot polled at [now], with the display configuration's
+  /// [generation] read in the same poll. Returns whether this poll cleared
+  /// a stale verdict.
+  bool update(MacosActivitySnapshot snapshot, int generation, Duration now) {
+    if (!snapshot.pointerReadable) {
+      reset();
+      return false;
+    }
+    final last = _last;
+    final lastGeneration = _generation;
+    _last = snapshot;
+    _generation = generation;
+    if (lastGeneration != null && generation != lastGeneration) {
+      _reconfiguredAt = now;
+    }
+    if (last == null) return false;
+
+    if (_wrap(snapshot.hid.moves - last.hid.moves) > 0) {
+      // The counters see the hardware.
+      _unexplained.clear();
+      if (_stale) {
+        _stale = false;
+        return true;
+      }
+      return false;
+    }
+    if ((snapshot.pointer - last.pointer).distance <= jumpThreshold) {
+      return false;
+    }
+    if (_explained(snapshot, last, now)) return false;
+    _unexplainedMoves++;
+    _unexplained.add(now);
+    while (_unexplained.isNotEmpty && now - _unexplained.first > window) {
+      _unexplained.removeFirst();
+    }
+    if (!_stale && _unexplained.length >= strikes) {
+      _stale = true;
+      _trips++;
+    }
+    return false;
+  }
+
+  bool _explained(
+    MacosActivitySnapshot snapshot,
+    MacosActivitySnapshot last,
+    Duration now,
+  ) {
+    final own = snapshot.own;
+    final before = last.own;
+    final posted =
+        _wrap(own.moves - before.moves) +
+        _wrap(own.buttonDowns - before.buttonDowns) +
+        _wrap(own.scrolls - before.scrolls);
+    if (posted > 0) return true;
+    final injected = _injectedPoint;
+    if (injected != null &&
+        (snapshot.pointer - injected).distance <= injectedSlack) {
+      return true;
+    }
+    final reconfigured = _reconfiguredAt;
+    return reconfigured != null && now - reconfigured <= reconfigurationGrace;
+  }
 
   static int _wrap(int delta) => delta & 0xFFFFFFFF;
 }
