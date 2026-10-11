@@ -153,6 +153,10 @@ class _HostPageState extends State<HostPage> {
         options: HostOptions(
           expiresAt: expiresAt,
           allowKeyboard: answer.allowKeyboard,
+          // The preset is meant for window shares; the example shares
+          // displays, and offers it for trying out (checkpoint C1, C2).
+          keyFilter: answer.blockShortcuts ? KeyFilters.windowShare : null,
+          allowSystemKeys: answer.allowSystemKeys,
         ),
       );
     } on Object catch (e) {
@@ -465,10 +469,17 @@ class _HostPageState extends State<HostPage> {
 
 /// The person's answer in the consent dialog.
 class _Consent {
-  const _Consent({required this.allow, required this.allowKeyboard});
+  const _Consent({
+    required this.allow,
+    required this.allowKeyboard,
+    this.blockShortcuts = false,
+    this.allowSystemKeys = false,
+  });
 
   final bool allow;
   final bool allowKeyboard;
+  final bool blockShortcuts;
+  final bool allowSystemKeys;
 }
 
 class _ConsentDialog extends StatefulWidget {
@@ -482,6 +493,8 @@ class _ConsentDialog extends StatefulWidget {
 
 class _ConsentDialogState extends State<_ConsentDialog> {
   bool _allowKeyboard = true;
+  bool _blockShortcuts = false;
+  bool _allowSystemKeys = false;
 
   @override
   Widget build(BuildContext context) {
@@ -509,6 +522,29 @@ class _ConsentDialogState extends State<_ConsentDialog> {
             onChanged: (v) => setState(() => _allowKeyboard = v ?? true),
             title: const Text('Allow the keyboard too'),
           ),
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _blockShortcuts,
+            onChanged: _allowKeyboard
+                ? (v) => setState(() => _blockShortcuts = v ?? false)
+                : null,
+            title: const Text('Block system shortcuts'),
+            subtitle: const Text(
+              'Win key, Alt+Tab, Ctrl+Shift+Esc; Cmd+Tab, Cmd+Space, '
+              'lock and log out (KeyFilters.windowShare)',
+            ),
+          ),
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _allowSystemKeys,
+            onChanged: _allowKeyboard
+                ? (v) => setState(() => _allowSystemKeys = v ?? false)
+                : null,
+            title: const Text('Allow system keys'),
+            subtitle: const Text(
+              'Power, sleep, media and app-launch keys, and Fn',
+            ),
+          ),
         ],
       ),
       actions: [
@@ -522,7 +558,12 @@ class _ConsentDialogState extends State<_ConsentDialog> {
         FilledButton(
           onPressed: () => Navigator.pop(
             context,
-            _Consent(allow: true, allowKeyboard: _allowKeyboard),
+            _Consent(
+              allow: true,
+              allowKeyboard: _allowKeyboard,
+              blockShortcuts: _blockShortcuts,
+              allowSystemKeys: _allowSystemKeys,
+            ),
           ),
           child: const Text('Allow'),
         ),

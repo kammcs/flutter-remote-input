@@ -12,6 +12,12 @@ void main() {
       HostLimitation.forPlatform(PeerPlatform.macos),
       contains(HostLimitation.passwordFields),
     );
+    for (final p in [PeerPlatform.windows, PeerPlatform.macos]) {
+      expect(
+        HostLimitation.forPlatform(p),
+        contains(HostLimitation.systemKeys),
+      );
+    }
     for (final p in [
       PeerPlatform.ios,
       PeerPlatform.android,

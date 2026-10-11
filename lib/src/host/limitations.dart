@@ -16,6 +16,11 @@ enum HostLimitation {
   /// Windows: games that read raw input or use anti-cheat.
   someGames('Some games'),
 
+  /// Both: power, sleep, media, app-launch and browser keys, and Fn (the
+  /// Globe key on a Mac), unless the app allows them
+  /// (`HostOptions.allowSystemKeys`).
+  systemKeys('Power, sleep, media and app-launch keys, and Fn'),
+
   /// macOS: typing into password fields and other secure input. The
   /// pointer still works there.
   passwordFields('Typing into password fields'),
@@ -49,11 +54,13 @@ enum HostLimitation {
         secureDesktop,
         ctrlAltDel,
         someGames,
+        systemKeys,
       ],
       PeerPlatform.macos => const [
         accessibilityPermission,
         passwordFields,
         lockScreen,
+        systemKeys,
       ],
       _ => const [unsupportedPlatform],
     };

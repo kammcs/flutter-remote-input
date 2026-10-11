@@ -10,6 +10,10 @@ const int _escape = 0x00070029;
 const int _keyC = 0x00070006;
 const int _keyV = 0x00070019;
 const int _keyZ = 0x0007001D;
+const int _keyH = 0x0007000B;
+const int _keyL = 0x0007000F;
+const int _keyQ = 0x00070014;
+const int _digit1 = 0x0007001E;
 
 /// What [typeOnHost] typed.
 enum TypedText {
@@ -118,6 +122,36 @@ class SendKeysMenu extends StatelessWidget {
     ('Ctrl+Z (undo)', [HidModifier.controlLeft, _keyZ]),
   ];
 
+  /// System keys and OS shortcuts, as named on the host (no Control and
+  /// Command mapping), for checking that the host drops them
+  /// (`HostOptions.allowSystemKeys`, `KeyFilters.windowShare`;
+  /// docs/checkpoint.md C1 and C2). Each may act on the host for real:
+  /// sleep, lock, log out.
+  static const List<(String, List<int>, int)> _hostKeys = [
+    ('Sleep', [0x00010082], 1),
+    ('Wake Up', [0x00010083], 1),
+    ('Power', [0x00070066], 1),
+    ('Launch App 1', [0x000C0194], 1),
+    ('Launch App 2', [0x000C0192], 1),
+    ('Win+L (lock)', [HidModifier.metaLeft, _keyL], 1),
+    ('Win+H (dictation)', [HidModifier.metaLeft, _keyH], 1),
+    ('Win+1 (first taskbar app)', [HidModifier.metaLeft, _digit1], 1),
+    (
+      'Ctrl+Shift+Esc (Task Manager)',
+      [HidModifier.controlLeft, HidModifier.shiftLeft, _escape],
+      1,
+    ),
+    ('Fn (Globe)', [0x00000012], 1),
+    ('Fn Fn (dictation)', [0x00000012], 2),
+    (
+      'Ctrl+Cmd+Q (lock)',
+      [HidModifier.controlLeft, HidModifier.metaLeft, _keyQ],
+      1,
+    ),
+  ];
+
+  static const int _hostKeysBase = 1000;
+
   Future<void> _typeText(BuildContext context) async {
     final text = await showDialog<String>(
       context: context,
@@ -154,6 +188,11 @@ class SendKeysMenu extends StatelessWidget {
       onSelected: (i) {
         if (i < 0) {
           _typeText(context);
+        } else if (i >= _hostKeysBase) {
+          final (_, usages, times) = _hostKeys[i - _hostKeysBase];
+          for (var n = 0; n < times; n++) {
+            viewer.sendShortcut(usages, mapModifiers: false);
+          }
         } else {
           // Keeps the key bar's sticky modifiers held on the host.
           viewer.sendShortcut(
@@ -174,6 +213,13 @@ class SendKeysMenu extends StatelessWidget {
         const PopupMenuDivider(),
         for (var i = 0; i < _shortcuts.length; i++)
           PopupMenuItem(value: i, child: Text(_shortcuts[i].$1)),
+        const PopupMenuDivider(),
+        const PopupMenuItem(
+          enabled: false,
+          child: Text('System keys, as named on the host (checks)'),
+        ),
+        for (var i = 0; i < _hostKeys.length; i++)
+          PopupMenuItem(value: _hostKeysBase + i, child: Text(_hostKeys[i].$1)),
       ],
     );
   }

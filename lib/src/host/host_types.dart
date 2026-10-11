@@ -1,14 +1,34 @@
+import '../protocol/wire_types.dart' show KeyModifiers, PeerPlatform;
+
 /// A key press, as a `KeyFilter` sees it.
 final class KeyPress {
   /// Creates a [KeyPress].
-  const KeyPress({required this.usage, required this.heldModifiers});
+  const KeyPress({
+    required this.usage,
+    required this.heldModifiers,
+    this.modifiers = KeyModifiers.none,
+    this.hostPlatform = PeerPlatform.unknown,
+  });
 
   /// The key's USB HID usage (`page << 16 | id`), after modifier mapping.
   final int usage;
 
   /// The HID usages of the modifier keys the session holds (left and right
-  /// Control, Shift, Alt and Meta: `0x700E0`–`0x700E7`), after mapping.
+  /// Control, Shift, Alt and Meta: `0x700E0`–`0x700E7`), after mapping:
+  /// what the host's OS sees held.
   final Set<int> heldModifiers;
+
+  /// The modifiers the viewer reports holding ([KeyModifiers] bits: Shift,
+  /// Control, Alt, Meta), after mapping. They can differ from
+  /// [heldModifiers] when the host dropped a modifier key: a filter that
+  /// drops the Windows key itself sees here that the viewer still holds
+  /// it, so it can drop Win+R's R rather than type an "r".
+  final int modifiers;
+
+  /// The host's OS, so one filter can follow each platform's shortcuts
+  /// (`KeyFilters.windowShare`). [PeerPlatform.unknown] for a custom
+  /// `HostPlatform` that doesn't say.
+  final PeerPlatform hostPlatform;
 }
 
 /// Why the host dropped an input message instead of injecting it. Counted
@@ -44,6 +64,11 @@ enum DropReason {
 
   /// The app's `KeyFilter` dropped it.
   filtered,
+
+  /// A system key: power, sleep, media, app-launch and browser keys, or
+  /// Fn, which `HostOptions.allowSystemKeys` lets through
+  /// (`KeyFilters.isSystemKey`).
+  systemKey,
 
   /// More keys held than `InputLimits.maxHeldKeys`.
   tooManyKeys,

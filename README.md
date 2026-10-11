@@ -34,7 +34,7 @@ if (RemoteInputHost.isSupported) {
   final session = RemoteInputHost().enable(
     link: link,                                  // your InputLink to the granted viewer
     surface: const SharedSurface.display(1),     // or .window(handle), or .rect(bounds)
-    options: HostOptions(expiresAt: grantExpiry),
+    options: HostOptions(expiresAt: grantExpiry), // for a window: keyFilter: KeyFilters.windowShare
   );
   session.stateChanges.listen(updateBanner);     // active, paused, blocked, stopped
   // ... session.stop() from your Stop button; RemoteInputHost.stopAll() from a hotkey
@@ -84,6 +84,8 @@ The package injects input into someone's computer, so:
 - **Instant stop.** `stop()` is synchronous; afterwards the package only releases keys and buttons it was holding. `stopAll()` is there for a global revoke hotkey.
 - **Local input wins.** When the presenter touches their own mouse or keyboard, injection pauses at once.
 - **Rate limits and bounds checks** on every message. Input can't address anything outside the shared surface.
+- **System keys are dropped by default:** power, sleep, media, app-launch and browser keys, and Fn (the Globe key on a Mac). `HostOptions(allowSystemKeys: true)` lets them through.
+- **Keys and window shares.** A window share injects keys only while the shared window is in front, but the OS acts on its own shortcuts before any window sees them. **Pass `KeyFilters.windowShare` for window shares:** it drops Win+anything, Ctrl+Shift+Esc and Alt+Tab on Windows, and Cmd+Tab, Cmd+Space, Force Quit, lock and log out on a Mac, while copy, paste and other ordinary shortcuts keep working. It isn't on by default. What still gets through: on a display share, keys go to whatever window has focus and OS shortcuts work; with the preset, shortcuts other software adds (launchers like Alfred), unmodified F-keys the OS assigns, screenshots, and whatever your own filter allows. [Design §6.4](docs/design.md#64-rate-limits-and-bounds-checks) has the full lists.
 - **No elevated or secure contexts.** It won't drive administrator apps or UAC prompts on Windows, or type into password fields on macOS. It reports when it's blocked.
 - **No logging of what anyone types.**
 

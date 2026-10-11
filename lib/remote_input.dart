@@ -26,7 +26,13 @@ export 'src/host/host_types.dart'
         SessionStats,
         ViolationKind;
 export 'src/host/options.dart'
-    show HostOptions, InputLimits, KeyFilter, ModifierMapping, ResumePolicy;
+    show
+        HostOptions,
+        InputLimits,
+        KeyFilter,
+        KeyFilters,
+        ModifierMapping,
+        ResumePolicy;
 export 'src/host/platform.dart'
     show
         HostPlatform,

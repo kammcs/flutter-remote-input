@@ -166,13 +166,18 @@ Built and unit-tested on macOS; the native C++ is compile-checked with mingw-w64
 3. Captured content vs bounds (§3.3): compare `DWMWA_EXTENDED_FRAME_BOUNDS` with what the screen capturer captures for a window; calibrate default `contentInsets`.
 4. Local input wins (§6.3): pause within 50 ms (the test prints it). The package's own events, its `SetCursorPos` fallback, and the left Ctrl Windows synthesizes for an injected AltGr must not pause the session.
 5. Secure contexts (§6.5): keys and pointer blocked over an admin app (Task Manager), both by the integrity check and by `SendInput` refusing. UAC, Ctrl+Alt+Del and the lock screen show `secureDesktop` (check whether Win+L leaves the input desktop as `Default`). AppContainer/Store apps are not reported as elevated.
-6. §7.2: back/forward buttons reach Flutter; both wheel axes scroll and feel right; extended keys (arrows, right Ctrl) and media keys work by scan code; emoji (surrogate pairs) type correctly.
+6. §7.2: back/forward buttons reach Flutter; both wheel axes scroll and feel right; extended keys (arrows, right Ctrl) work by scan code, and media keys too once allowed (step 9); emoji (surrogate pairs) type correctly.
 7. `RemoteInputHost.isSupported` is true in the example, and `checkAvailable()` is `null` under Flutter's PerMonitorV2 manifest.
 8. **Review fixes (M7):**
    - *Own windows:* share a display; the viewer clicks the host app's Stop button or consent dialog: nothing happens. With the host app in front, viewer keys are blocked (`hostAppInFront`); with another app in front, keys work.
    - *Movement while the viewer moves:* while the viewer drags or moves continuously, move the physical mouse slowly (about 1 cm): the session pauses within 50 ms. Resting a hand on the mouse or tapping the desk doesn't pause it.
    - *Hook health:* `remote_input_test.exe`'s `HealthFollowsTheHookThread` passes. Freeze the process about 2 s (debugger break, or Process Explorer's suspend), resume: during the freeze the session shows `blocked(localInputUnmonitored)`, then it pauses once for local input and resumes, and physical input still pauses it. Leave a session idle 60 s, then type on the physical keyboard: it pauses (the 15 s re-hooks work).
    - *Window ownership:* share one File Explorer window: its context menus, ribbon drop-downs and Properties dialog work; clicks on the taskbar, the desktop, Start and another Explorer window are dropped; after Win+R on the host, viewer keys are blocked. Share one Edge or Chrome window: its menus, `<select>` drop-downs, autofill and print/save dialogs work; a second window of the same browser over it drops clicks and blocks keys. Share Notepad: the File menu, the Font dialog and its drop-downs work.
+
+9. **System keys and shortcuts (RIN-43).** A viewer (either platform) paired with the Windows host, Notepad in front. Send each from the viewer's **Send keys → System keys, as named on the host**: Sleep, Power, Wake Up, Launch App 1, Launch App 2, Win+L, Win+H, Win+1, Ctrl+Shift+Esc. Save your work first: an allowed Sleep or Power really sleeps or shuts down.
+   - *Defaults* (consent dialog: both new boxes off): Sleep, Power, Wake Up and the Launch keys do nothing on the host; the session's stats count them as `systemKey`. Win+L locks, Win+H opens dictation, Win+1 opens the first taskbar app, Ctrl+Shift+Esc opens Task Manager: shortcuts aren't filtered by default.
+   - *Block system shortcuts* (`KeyFilters.windowShare`): Win+L, Win+H, Win+1 and Ctrl+Shift+Esc do nothing, and neither does a hardware Alt+Tab or Win+R from a Windows viewer (or Ctrl+R from a Mac viewer, which is Win+R on the host). Nothing stays held afterwards: type a lower-case letter in Notepad. Ctrl+C, Ctrl+V, Ctrl+Z, Ctrl+A (⌘ from a Mac viewer), Shift letters, Alt+F4 and Escape still work.
+   - *Allow system keys*: Launch App 2 opens the calculator and the media keys work (try Sleep or Power only on a machine you can lose the session on).
 
 ### C2. macOS: the Accessibility grant and the injection test
 
@@ -186,6 +191,11 @@ Only when the machine is free: the test moves the real pointer and types real ke
 6. **Own windows (M7 review):** share a display with the example's host and pair from a second machine. The viewer clicks the host app's window, including **Stop** and the consent dialog: nothing happens (counted as `hostWindow`). Put another app's window over the host's: clicks there land on that app. Bring the host app to the front: the viewer's keys are blocked (`hostAppInFront`).
 7. **Local mouse while the viewer moves:** the viewer moves in continuous circles; nudge the host's mouse about 1 point, then swipe the trackpad slowly: paused within 100 ms each time. Rest a hand on the mouse or trackpad without moving it for 10 s: no pause.
 8. **Stale permission cache:** the viewer holds Shift and the left button (dragging). Remove the app's Accessibility grant in Settings, then release on the viewer. Shift and the button must not stay down on the host: type a lower-case letter and move the mouse locally.
+
+9. **System keys and shortcuts (RIN-43).** A viewer paired with the Mac host, TextEdit in front. Send each from **Send keys → System keys, as named on the host**: Sleep, Power, Wake Up, Launch App 1, Launch App 2, Fn, Fn Fn, Ctrl+Cmd+Q. Save your work first.
+   - *Defaults:* none of them acts: no sleep, no Globe action (input source, emoji picker or dictation, per System Settings → Keyboard), no lock; counted as `systemKey` except Ctrl+Cmd+Q, which **locks the screen** (shortcuts aren't filtered by default; unlock and go on).
+   - *Block system shortcuts* (`KeyFilters.windowShare`): Ctrl+Cmd+Q doesn't lock, and from the viewer's keyboard Cmd+Tab (Ctrl+Tab from a Windows viewer), Cmd+Space, Cmd+Option+Esc, Cmd+Shift+Q, Ctrl+Up and Ctrl+F3 do nothing. Cmd+C, Cmd+V, Cmd+Z, Cmd+A (Ctrl+ from a Windows viewer), Cmd+Q in a throwaway app, Shift letters and Escape still work, and nothing stays held.
+   - *Allow system keys:* note whether an injected Fn acts as the Globe key (design §6.4 assumes it may), and whether Fn Fn starts dictation.
 
 ### C3. macOS: the App Sandbox test (design §7.3, open question 1)
 
@@ -209,6 +219,10 @@ Fill in one row per run. Result: pass, fail, or n/a with a reason.
 | C1.1 Build and gtests | Windows (MSVC) | `56aea67` | 2026-10-08 | — | pass | 11 of 12 gtests; `InjectedMoveWithForeignTagIsNotLocalInput` not run (it injects into the live desktop) |
 | C1.4 Local input wins | macOS → Windows | `5be8ca6`, `979dbe2` | 2026-10-08 | the first consumer's call (SFU DataChannels) | fail | Paused within about 0.25 s every time: each injected mouse move reached the hook flagged as injected but without the package's tag. Fixed in RIN-39 |
 | C1.4 Local input wins | macOS → Windows | `56aea67` | 2026-10-08 | the first consumer's call (SFU DataChannels) | pass | About 2 minutes of moves and typing, 1,863 events injected, no pause; a physical move paused control at once (not timed: B5). One 3440×1440 display at 100 % |
+| C1.9 System keys, shortcuts (RIN-43): defaults | → Windows | | | | | Sleep, Power, Wake Up, Launch 1/2 dropped |
+| C1.9 System keys, shortcuts (RIN-43): `windowShare` | → Windows | | | | | Win+L, Win+H, Win+1, Ctrl+Shift+Esc dropped; Ctrl+C/V work |
+| C2.9 System keys, shortcuts (RIN-43): defaults | → macOS | | | | | Sleep, Power, Wake Up, Launch 1/2, Fn, Fn Fn dropped |
+| C2.9 System keys, shortcuts (RIN-43): `windowShare` | → macOS | | | | | Ctrl+Cmd+Q, Cmd+Tab, Cmd+Space dropped; Cmd+C/V work; Fn with allowSystemKeys: |
 | A1 Pointer | Windows → macOS | | | | | |
 | A1 Pointer | macOS → Windows | | | | | |
 | A2 Keys | Windows → macOS | | | | | |
