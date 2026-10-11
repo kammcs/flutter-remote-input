@@ -1030,10 +1030,13 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
     if (_wheelTimer != null) return;
     final now = clock.now();
     final last = _lastWheelSent;
-    if (last == null || now.difference(last) >= _wheelInterval) {
+    final since = last == null ? null : now.difference(last);
+    // A negative time is a wall clock that went back (a time sync after
+    // wake): waiting across it would stall the wheel.
+    if (since == null || since >= _wheelInterval || since.isNegative) {
       _flushWheel();
     } else {
-      _wheelTimer = Timer(_wheelInterval - now.difference(last), () {
+      _wheelTimer = Timer(_wheelInterval - since, () {
         _wheelTimer = null;
         _flushWheel();
       });

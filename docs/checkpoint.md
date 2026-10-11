@@ -4,7 +4,7 @@ The checks that need two machines and a person: the [consumer checkpoint](roadma
 
 - **Part A** is the week-4 checkpoint: pointer, keys, stop and local input, in both directions between Windows and macOS.
 - **Part C** comes first on a new build: the device checks for each host platform (Windows injection, the macOS permission, injection test and App Sandbox test).
-- **Part B** is the rest of the success criteria for 0.1.0: every viewer platform, mixed DPI, layouts and IMEs, latency, and the timing of local input and stop.
+- **Part B** is the rest of the success criteria for 0.1.0: every viewer platform, mixed DPI, layouts and IMEs, latency, the timing of local input and stop, and long sessions.
 - The example's WebSocket link is the transport here. The checkpoint itself passes over the first consumer's call DataChannels, which its own team runs with the same steps; the [`cloudflare_realtime` adapter](../example/cloudflare_realtime_adapter/README.md) is the reference for that.
 
 ## Before you start
@@ -153,6 +153,61 @@ Then copy, paste, select all and undo in each direction. **Pass:** the text arri
 
 As A3 step 1, recorded as in B5: from **Stop** to the release of everything held. **Pass:** nothing is injected after Stop except releases, within 50 ms. Repeat by quitting the host app (it calls `RemoteInputHost.stopAll()`).
 
+### B7. Long sessions (M7, RIN-18)
+
+What fake time can't show: the OS's own key and button state after an hour, real sleep and wake, real display changes. The package's side is tested in fake time (`test/host/long_session_test.dart`, [design.md §6.2](design.md#62-instant-stop)). Run each check on a **Windows host and a Mac host**, with the other desktop as the viewer; the machine-specific steps are marked **Windows** or **Mac**. Record the commit, the host's OS version and displays, and the host banner's stats line (received, injected, dropped, violations) at the end of each check.
+
+**The stuck-input probe**, used below. With the viewer's hands off its keyboard and mouse, on the host:
+
+- Type `a` into the text editor on the host's own keyboard: a lower-case `a` appears and no shortcut fires (Shift, Ctrl, Alt, Cmd and Win aren't held).
+- Move the host's own mouse across text without pressing: nothing is selected or dragged (no button is held).
+- **Windows:** the On-Screen Keyboard (`osk`) shows no modifier lit. **Mac:** the Keyboard Viewer (input menu → Show Keyboard Viewer) shows no modifier lit.
+
+#### B7.1 An hour of input (Windows host and Mac host, about 65 minutes each)
+
+1. Pair, share the primary display, and open the text editor and a browser on a long page.
+2. For the hour, use the host from the viewer as you'd normally work, in bursts: every few minutes, a minute of typing in the editor (Shift, Backspace, arrows, select all, copy and paste), clicks and double clicks, a window dragged by its title bar, and scrolling. Between bursts, keep the pointer moving in slow circles over the grid.
+3. Every 10 minutes, aim at the four corners and the centre of the grid: the host's pointer goes there, as at the start.
+4. The example's grant ends after 30 minutes (`controlExpiry`). Let it end with Shift and a drag held on the viewer: the host shows **Control expired**. Run the probe, pair again, and carry on for the second half.
+5. At the end, let go on the viewer, wait 5 s, run the probe, and record the stats line and the example's memory (Task Manager or Activity Monitor) at the start and the end.
+
+**Pass:** the probe passes at the expiry and at the end; corners and centre land as at the start; violations 0; the session never paused or stopped by itself except at the expiry and when you touched the host; memory doesn't grow steadily.
+
+#### B7.2 Sleep and wake (Windows host and Mac host)
+
+1. **The host sleeps with input held.** On the viewer, hold Shift and start a drag. Put the host to sleep (**Windows:** Start → Power → Sleep; **Mac:** close the lid, or Apple menu → Sleep), wait 2 minutes, wake it and log in. Let go on the viewer.
+   - Within about 10 s of logging in, the host either shows the session stopped (**The connection closed**, **Control expired** or **The viewer left**) or still in control. Record which, and how long it took.
+   - The probe passes.
+2. **The grant expires during sleep.** Pair, and wait until the banner's "ends in" shows under 2 minutes. Sleep the host for 3 minutes, wake it, and keep typing `x` on the viewer while the host logs in.
+   - The host shows **Control expired** or **The connection closed** within about 10 s of logging in, and no `x` arrives after that. The probe passes.
+3. **The viewer sleeps with a button held.** Start a drag on the viewer and, holding the button, put the viewer to sleep with its keyboard (**Windows:** Win+X, U, S; **Mac:** Option-Command-Power).
+   - On the host, the button is released within about 5 s (`heartbeatTimeout`: move the host's mouse, nothing drags), and the session stops with **The connection closed** within about 15 s.
+   - Wake the viewer: it shows the session ended, and the probe passes on the host.
+
+**Pass:** nothing stays held after any sleep; nothing the viewer sends after an expiry is injected.
+
+#### B7.3 Display changes (Windows host and Mac host; needs a second display)
+
+1. Share the second display. Aim at the corners and centre: they land on it.
+2. **Rearrange:** move the shared display to the other side of the primary, left of or above it (**Windows:** Settings → System → Display, drag it, Apply; **Mac:** System Settings → Displays → Arrange). Without pairing again, aim at the corners and centre: they land on the shared display in its new place.
+3. **Resize:** change the shared display's resolution (**Windows:** also try a different scale, 150 %; **Mac:** a different "Larger text / More space" setting). Corners and centre still land on it. The grid keeps the old aspect ratio until you pair again: note how far off the centre is.
+4. **Add:** connect a third display, or unplug and replug a display that isn't shared. Control carries on, on the shared display.
+5. **Remove:** hold Shift and a drag on the viewer, then unplug the shared display (or turn it off, if that removes it). At the viewer's next pointer move, the host shows **The shared screen went away**. Let go, and run the probe.
+
+**Pass:** input never lands on a display other than the shared one; the session stops when the shared display goes; nothing stays held. Record each display's size, scale and position before and after.
+
+#### B7.4 The shared window (Windows host and Mac host; needs a window share)
+
+The example shares whole displays. Run this with an app that shares one window, such as the first consumer's window share (`SharedSurface.window`).
+
+1. Share a text editor's window. Type, click and drag in it from the viewer: it works.
+2. **Move and resize it** on the host, including onto a display left of the primary if there is one. Clicks from the viewer land on the window's content in its new place.
+3. **Minimize it:** the viewer shows control blocked, and nothing it sends arrives. Restore it: control returns within about a second.
+4. **Close it with input held:** on the viewer, hold Shift and drag inside the window; on the host, close the window (or quit its app) with the host's own keyboard. At the viewer's next move or key, the session stops (**The shared screen went away**). Let go, and run the probe.
+5. **Close it while minimized:** pair again, minimize the window, and quit its app on the host. The session stops within about a second, with no input from the viewer.
+
+**Pass:** nothing lands outside the window; the session stops when the window closes; nothing stays held.
+
 ## C. Device checks for the host platforms
 
 The Windows and macOS hosts are built and unit-tested; these are the checks that need the real OS. Part A needs them to pass first.
@@ -228,3 +283,11 @@ Fill in one row per run. Result: pass, fail, or n/a with a reason.
 | B4 Latency (LAN) | each direction | | | | | p50 / p95 |
 | B5 Local input timing | → Windows / → macOS | | | | | ms |
 | B6 Stop timing | → Windows / → macOS | | | | | ms |
+| B7.1 An hour of input | macOS → Windows | | | | | stats; memory start / end |
+| B7.1 An hour of input | Windows → macOS | | | | | stats; memory start / end |
+| B7.2 Sleep and wake | macOS → Windows | | | | | state after wake, seconds |
+| B7.2 Sleep and wake | Windows → macOS | | | | | state after wake, seconds |
+| B7.3 Display changes | macOS → Windows | | | | | displays before / after |
+| B7.3 Display changes | Windows → macOS | | | | | displays before / after |
+| B7.4 Shared window | macOS → Windows | | | | | app used for the window share |
+| B7.4 Shared window | Windows → macOS | | | | | app used for the window share |

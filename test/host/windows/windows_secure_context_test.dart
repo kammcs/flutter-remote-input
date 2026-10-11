@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:clock/clock.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:remote_input/remote_input.dart';
@@ -97,6 +98,23 @@ void main() {
       async.elapse(const Duration(seconds: 3));
       probe.check(InputKind.keyboard);
       expect(api.integrityQueries, [3, 3]);
+    });
+  });
+
+  test('a wall clock that goes back does not stretch the cache (RIN-18)', () {
+    fakeAsync((async) {
+      var offset = Duration.zero;
+      final fake = clock;
+      withClock(Clock(() => fake.now().add(offset)), () {
+        probe = WindowsSecureContextProbe(api);
+        api.foreground = _admin;
+        probe.check(InputKind.keyboard);
+        // A time sync after wake sets the clock back an hour.
+        offset = const Duration(hours: -1);
+        async.elapse(const Duration(seconds: 3));
+        probe.check(InputKind.keyboard);
+        expect(api.integrityQueries, [3, 3]);
+      });
     });
   });
 

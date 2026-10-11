@@ -1,3 +1,4 @@
+import 'package:clock/clock.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -205,6 +206,27 @@ void main() {
     expect(pans.fold<int>(0, (s, w) => s + w.dx), 12); // 12.5, truncated
     expect(pans.every((w) => w.point == at(p)), isTrue);
     await h.finish(tester);
+  });
+
+  testWidgets('the wheel keeps scrolling when the wall clock goes back '
+      '(RIN-18)', (tester) async {
+    final h = Harness();
+    await h.start(tester, capture);
+    const p = Offset(400, 300);
+    final pointer = TestPointer(1, PointerDeviceKind.mouse);
+    var offset = Duration.zero;
+    final fake = clock;
+    await withClock(Clock(() => fake.now().add(offset)), () async {
+      await tester.sendEventToBinding(pointer.hover(p));
+      await tester.sendEventToBinding(pointer.scroll(const Offset(0, 120)));
+      await h.settle(tester);
+      // A time sync after wake sets the clock back an hour.
+      offset = const Duration(hours: -1);
+      await tester.sendEventToBinding(pointer.scroll(const Offset(0, 120)));
+      await h.settle(tester);
+      expect(h.events.whereType<InjectedWheel>(), hasLength(2));
+      await h.finish(tester);
+    });
   });
 
   testWidgets('maps through each fit, and an explicit content rect', (
