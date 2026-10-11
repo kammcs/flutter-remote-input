@@ -216,4 +216,9 @@ abstract interface class MacosNative {
 
   /// A snapshot for the local-activity monitor.
   MacosActivitySnapshot activitySnapshot();
+
+  /// Keyboards and pointing devices removed since the native device watch
+  /// armed (the first call arms it), Bluetooth powering off included: a
+  /// counter that only grows. -1 if the watch couldn't arm (RIN-41).
+  int devicesLost();
 }

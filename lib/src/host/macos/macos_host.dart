@@ -483,11 +483,14 @@ final class MacosSecureContext implements SecureContextProbe {
 /// Local input on macOS, by polling the HID system's event counters while
 /// [activity] has a listener (`docs/design.md` §6.3; see
 /// [MacosActivityDetector]).
-final class MacosLocalActivity implements LocalActivityMonitor {
-  // The HID counters are always readable.
-  @override
-  bool get isMonitoring => true;
-
+///
+/// **Lost devices (RIN-41).** Each poll also reads the native device
+/// watch's count of keyboards and pointing devices removed (I/O Registry
+/// notifications, no permission), and emits on [devicesLost] when it grew.
+/// If the watch couldn't arm, [isMonitoring] is false: no injection without
+/// it.
+final class MacosLocalActivity
+    implements LocalActivityMonitor, LocalDeviceMonitor {
   /// Creates a monitor over [native], polling every [pollInterval] (10 ms,
   /// for a pause within the 100 ms target).
   MacosLocalActivity(
@@ -506,11 +509,23 @@ final class MacosLocalActivity implements LocalActivityMonitor {
     onListen: _start,
     onCancel: _stop,
   );
+  final StreamController<void> _devices = StreamController.broadcast();
   Timer? _timer;
   Stopwatch? _watch;
+  int _devicesLost = -1;
 
   @override
   Stream<void> get activity => _controller.stream;
+
+  /// Each poll that sees keyboards or pointing devices removed since the
+  /// last one (RIN-41). Watched while [activity] has a listener.
+  @override
+  Stream<void> get devicesLost => _devices.stream;
+
+  /// Whether the counters are being polled and the device watch is armed.
+  /// The HID counters themselves are always readable.
+  @override
+  bool get isMonitoring => _timer != null && _devicesLost >= 0;
 
   /// Tells the monitor the package put the pointer at [point].
   void noteInjectedPointer(Offset point) =>
@@ -519,6 +534,8 @@ final class MacosLocalActivity implements LocalActivityMonitor {
   void _start() {
     _detector.reset();
     _watch = clock.stopwatch()..start();
+    // A baseline: removals before monitoring started don't count.
+    _devicesLost = _native.devicesLost();
     _poll();
     _timer = Timer.periodic(pollInterval, (_) => _poll());
   }
@@ -527,14 +544,19 @@ final class MacosLocalActivity implements LocalActivityMonitor {
     _timer?.cancel();
     _timer = null;
     _watch = null;
+    _devicesLost = -1;
     _detector.reset();
   }
 
   void _poll() {
     final watch = _watch;
     if (watch == null) return;
+    final lost = _native.devicesLost();
+    final deviceLost = lost >= 0 && _devicesLost >= 0 && lost != _devicesLost;
+    _devicesLost = lost;
     if (_detector.update(_native.activitySnapshot(), watch.elapsed)) {
       _controller.add(null);
     }
+    if (deviceLost) _devices.add(null);
   }
 }

@@ -156,6 +156,24 @@ void main() {
     });
   });
 
+  test('Bluetooth turned off during a session stops it (RIN-41)', () {
+    fakeAsync((async) {
+      final pair = MemoryInputLink.pair();
+      final viewer = RawViewer(pair.viewer);
+      final session = RemoteInputHost(platform: platform)
+          .enable(link: pair.host, surface: const SharedSurface.display(1));
+      async.flushMicrotasks();
+      viewer.hello();
+      async.flushMicrotasks();
+      expect(session.state, const SessionActive());
+      // The hook thread saw the wireless keyboard and mouse go.
+      native.lost += 2;
+      async.elapse(const Duration(milliseconds: 10));
+      expect(session.state, const SessionStopped(StopReason.localDeviceLost));
+      expect(viewer.states.last.reason, StopReason.localDeviceLost.code);
+    });
+  });
+
   test('a window in front of the shared one drops the click', () {
     fakeAsync((async) {
       api.windows[0x2000] = FakeWindow(pid: 999);

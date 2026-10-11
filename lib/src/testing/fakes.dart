@@ -195,14 +195,29 @@ final class RecordingInjector implements InputInjector {
   InjectResult text(String text) => _record(InjectedText(text));
 }
 
-/// A [LocalActivityMonitor] driven by the test.
-final class FakeLocalActivity implements LocalActivityMonitor {
+/// A [LocalActivityMonitor] driven by the test, with the optional
+/// [LocalDeviceMonitor].
+final class FakeLocalActivity
+    implements LocalActivityMonitor, LocalDeviceMonitor {
   final StreamController<void> _activity = StreamController.broadcast(
+    sync: true,
+  );
+  final StreamController<void> _devicesLost = StreamController.broadcast(
     sync: true,
   );
 
   @override
   Stream<void> get activity => _activity.stream;
+
+  @override
+  Stream<void> get devicesLost => _devicesLost.stream;
+
+  /// Reports a keyboard or pointing device removed, as if the viewer turned
+  /// the host's Bluetooth off (RIN-41). Only while [activity] is listened
+  /// to, as a platform monitor watches.
+  void simulateDeviceLost() {
+    if (_activity.hasListener) _devicesLost.add(null);
+  }
 
   /// Whether local input is detected: something listens, and [healthy].
   @override

@@ -26,7 +26,7 @@ with the Accessibility permission checks. See the package's docs/design.md.
   s.dependency 'FlutterMacOS'
   # CGEventPost and the window list (CoreGraphics), Secure Event Input
   # (Carbon's HIToolbox) and NSWorkspace (AppKit).
-  s.frameworks = 'AppKit', 'ApplicationServices', 'Carbon', 'CoreGraphics'
+  s.frameworks = 'AppKit', 'ApplicationServices', 'Carbon', 'CoreGraphics', 'IOKit'
 
   s.platform = :osx, '12.0'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }

@@ -110,6 +110,16 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
             'remote_input_activity_largest_step',
             isLeaf: true,
           ),
+      _activityDevicesLost = plugin
+          .lookupFunction<Uint64 Function(), int Function()>(
+            'remote_input_activity_devices_lost',
+            isLeaf: true,
+          ),
+      _activityInputDevices = plugin
+          .lookupFunction<Int32 Function(), int Function()>(
+            'remote_input_activity_input_devices',
+            isLeaf: true,
+          ),
       injectionTag = plugin
           .lookupFunction<Uint64 Function(), int Function()>('remote_input_tag')
           .call() {
@@ -283,6 +293,8 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
   final int Function() _activityLongestGap;
   final int Function(int) _activityMoveOrigin;
   final int Function() _activityLargestStep;
+  final int Function() _activityDevicesLost;
+  final int Function() _activityInputDevices;
 
   // user32, kernel32, advapi32, dwmapi.
   late final int Function(int) _getSystemMetrics;
@@ -596,6 +608,12 @@ final class FfiWin32Api implements Win32Api, NativeActivity {
 
   @override
   int largestPhysicalStepPx() => _activityLargestStep();
+
+  @override
+  int devicesLost() => _activityDevicesLost();
+
+  @override
+  int inputDevices() => _activityInputDevices();
 }
 
 /// Monitors found by the running `EnumDisplayMonitors` call. The callback

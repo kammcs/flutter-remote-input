@@ -71,6 +71,10 @@ String _stopped(StopReason reason, bool host) => switch (reason) {
     'The two apps speak different protocol versions',
   StopReason.hostLeft => 'The host left',
   StopReason.timedOut => 'Lost contact with the host',
+  StopReason.localDeviceLost =>
+    host
+        ? 'Stopped: a keyboard or mouse was disconnected'
+        : 'Stopped: a keyboard or mouse at the host was disconnected',
   StopReason.other => 'Control stopped',
 };
 

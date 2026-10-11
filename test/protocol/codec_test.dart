@@ -137,6 +137,64 @@ void main() {
       final types = golden.values.map((g) => g.$1.type).toSet();
       expect(types, hasLength(13));
     });
+
+    test('HostState stopped(localDeviceLost) (RIN-41)', () {
+      // A reason added within v1 (§5.5): a new code in StopReason.
+      final message = HostState(
+        state: HostStateCode.stopped,
+        reason: StopReason.localDeviceLost.code,
+        surfaceEpoch: 0x0203,
+      );
+      const bytes = '04 1011 04 0e 0302';
+      expect(toHex(encodeMessage(message, sessionTag: tag)), toHex(hex(bytes)));
+      final decoded =
+          (decodeMessage(hex(bytes)) as Decoded).message as HostState;
+      expect(decoded.state, HostStateCode.stopped);
+      expect(StopReason.fromCode(decoded.reason), StopReason.localDeviceLost);
+    });
+
+    test('state reason codes are pinned', () {
+      // Changing one is a protocol change. Adding one within v1 is not:
+      // older peers decode an unknown code as `other`.
+      expect(
+        {for (final r in StopReason.values) r.name: r.code},
+        {
+          'byHost': 1,
+          'stopAll': 2,
+          'linkClosed': 3,
+          'expired': 4,
+          'surfaceGone': 5,
+          'protocolViolation': 6,
+          'flooding': 7,
+          'viewerLeft': 8,
+          'permissionDenied': 9,
+          'viewerClosed': 10,
+          'unsupportedVersion': 11,
+          'hostLeft': 12,
+          'timedOut': 13,
+          'localDeviceLost': 14,
+          'other': 255,
+        },
+      );
+      expect(
+        {for (final r in PauseReason.values) r.name: r.code},
+        {'localInput': 1, 'byHost': 2, 'other': 255},
+      );
+      expect(
+        {for (final r in BlockReason.values) r.name: r.code},
+        {
+          'elevatedTarget': 1,
+          'secureDesktop': 2,
+          'secureInput': 3,
+          'sessionInactive': 4,
+          'surfaceHidden': 5,
+          'windowNotInFront': 6,
+          'localInputUnmonitored': 7,
+          'hostAppInFront': 8,
+          'other': 255,
+        },
+      );
+    });
   });
 
   group('decoding', () {

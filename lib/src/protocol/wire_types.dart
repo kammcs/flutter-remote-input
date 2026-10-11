@@ -249,6 +249,13 @@ enum StopReason {
   /// side only): it crashed, slept, or lost its network.
   timedOut(13),
 
+  /// A keyboard or pointing device of the host was removed or disconnected,
+  /// Bluetooth powering off included (`docs/design.md` §6.3, RIN-41). The
+  /// person at the host may have lost the devices they'd take control back
+  /// with, so the session ends rather than waiting for its grant to expire.
+  /// Older viewers decode it as [other].
+  localDeviceLost(14),
+
   /// A reason this version doesn't know, from a newer host.
   other(255);
 

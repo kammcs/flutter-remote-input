@@ -70,6 +70,56 @@ void main() {
     });
   });
 
+  group('lost devices (RIN-41)', () {
+    test('a removal emits once, within one poll', () {
+      fakeAsync((async) {
+        // Removals before monitoring started don't count.
+        final native = FakeNativeActivity()..lost = 2;
+        final monitor = WindowsLocalActivity(native);
+        var lost = 0;
+        var local = 0;
+        final sub = monitor.activity.listen((_) => local++);
+        final devices = monitor.devicesLost.listen((_) => lost++);
+        async.elapse(const Duration(milliseconds: 50));
+        expect(lost, 0);
+        // Bluetooth off: a keyboard and a mouse.
+        native.lost += 2;
+        async.elapse(const Duration(milliseconds: 10));
+        expect(lost, 1);
+        expect(local, 0);
+        async.elapse(const Duration(milliseconds: 100));
+        expect(lost, 1);
+        native
+          ..lost += 1
+          ..devices = 1;
+        async.elapse(const Duration(milliseconds: 10));
+        expect(lost, 2);
+        expect(monitor.localInputCounts.details, {
+          'devicesLost': 5,
+          'inputDevices': 1,
+        });
+        sub.cancel();
+        devices.cancel();
+      });
+    });
+
+    test('removals while nothing listens do not count', () {
+      fakeAsync((async) {
+        final native = FakeNativeActivity();
+        final monitor = WindowsLocalActivity(native);
+        var lost = 0;
+        monitor.devicesLost.listen((_) => lost++);
+        native.lost = 3;
+        async.elapse(const Duration(milliseconds: 50));
+        expect(lost, 0);
+        final sub = monitor.activity.listen((_) {});
+        async.elapse(const Duration(milliseconds: 50));
+        expect(lost, 0);
+        sub.cancel();
+      });
+    });
+  });
+
   group('health', () {
     test('hooks that are lost stop monitoring; recovery emits once', () {
       fakeAsync((async) {

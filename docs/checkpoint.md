@@ -174,6 +174,11 @@ Built and unit-tested on macOS; the native C++ is compile-checked with mingw-w64
    - *Hook health:* `remote_input_test.exe`'s `HealthFollowsTheHookThread` passes. Freeze the process about 2 s (debugger break, or Process Explorer's suspend), resume: during the freeze the session shows `blocked(localInputUnmonitored)`, then it pauses once for local input and resumes, and physical input still pauses it. Leave a session idle 60 s, then type on the physical keyboard: it pauses (the 15 s re-hooks work).
    - *Window ownership:* share one File Explorer window: its context menus, ribbon drop-downs and Properties dialog work; clicks on the taskbar, the desktop, Start and another Explorer window are dropped; after Win+R on the host, viewer keys are blocked. Share one Edge or Chrome window: its menus, `<select>` drop-downs, autofill and print/save dialogs work; a second window of the same browser over it drops clicks and blocks keys. Share Notepad: the File menu, the Font dialog and its drop-downs work.
 
+9. **Lost devices (RIN-41):** share a display and pair from a second machine. The viewer opens the quick settings (Win+A) and turns Bluetooth off. Run it **with a Bluetooth LE keyboard or mouse** (most current ones, and every "Swift Pair" device) and, if you have one, **again with a classic Bluetooth one**. To tell them apart: Device Manager → View → Devices by connection; an LE device sits under "Microsoft Bluetooth LE Enumerator", a classic one under "Microsoft Bluetooth Enumerator".
+   - **Before the fix** (a commit before RIN-41): control goes on, and the presenter's wireless keyboard and mouse no longer pause it. Record it.
+   - **After:** the session stops at once with `localDeviceLost` (host: "Stopped: a keyboard or mouse was disconnected"), and `SessionStats.localInput.details` shows `devicesLost` grow and `inputDevices` drop. Repeat by unplugging a USB mouse's receiver. Plugging a device in doesn't stop anything.
+   - **The open point (design §6.3, verify):** if the LE device doesn't stop the session, record `inputDevices` before and after turning Bluetooth off. Unchanged means Windows keeps a disconnected LE device in its raw input list, and RIN-41 needs a radio-state signal on Windows.
+
 ### C2. macOS: the Accessibility grant and the injection test
 
 Only when the machine is free: the test moves the real pointer and types real keys, into its own window only.
@@ -187,6 +192,10 @@ Only when the machine is free: the test moves the real pointer and types real ke
 7. **Local mouse while the viewer moves:** the viewer moves in continuous circles; nudge the host's mouse about 1 point, then swipe the trackpad slowly: paused within 100 ms each time. Rest a hand on the mouse or trackpad without moving it for 10 s: no pause.
 8. **Stale permission cache:** the viewer holds Shift and the left button (dragging). Remove the app's Accessibility grant in Settings, then release on the viewer. Shift and the button must not stay down on the host: type a lower-case letter and move the mouse locally.
 
+9. **Lost devices (RIN-41):** with a Bluetooth keyboard, mouse or trackpad connected, share a display and pair from a second machine. The viewer opens Control Center and turns Bluetooth off.
+   - **Before the fix** (a commit before RIN-41): control goes on, and the presenter's wireless devices no longer pause it. Record it.
+   - **After:** the session stops at once with `localDeviceLost`. No Input Monitoring prompt appears, and the app doesn't appear under System Settings → Privacy & Security → Input Monitoring. Repeat by unplugging a USB mouse; plugging one in stops nothing.
+
 ### C3. macOS: the App Sandbox test (design §7.3, open question 1)
 
 Preparation: open `example/macos/Runner.xcworkspace`; on the Runner target set your Team (Apple Development certificate) and add **Hardened Runtime**; leave App Sandbox on (both entitlements files are sandboxed). **Don't commit the team ID.** Then `cd example && flutter build macos --release -t lib/macos_check.dart`, check `codesign -dv --entitlements - build/macos/Build/Products/Release/remote_input_example.app` shows `flags=0x10000(runtime)`, `app-sandbox` true and an Apple Development authority, and remove old `remote_input_example` entries from the Accessibility list. Record the macOS build and each result:
@@ -196,7 +205,8 @@ Preparation: open `example/macos/Runner.xcworkspace`; on the Runner target set y
 3. **Bounds, frontmost app, secure input and session can be read:** **Type into this window** and click the page's field: the text arrives. Repeat but switch apps during the countdown: the log shows `dropped {notFocused: …}`. Click the page's password field, press the button and click the field again: `SessionBlocked(secureInput)` (if Flutter's obscured field doesn't turn on Secure Event Input, use Terminal → Secure Keyboard Entry with Terminal in front). **Circle**, lock with Ctrl-Cmd-Q, unlock: `SessionBlocked(sessionInactive)`. With **Type into this window** running, press Cmd+Space during the countdown: keys are blocked (`windowNotInFront`) while Spotlight is open, and resume after Esc.
 4. **Local input wins:** **Circle for 8 s**, nudge the mouse once: `SessionPaused(localInput)`, the circle stops, then `SessionActive` about 1.5 s after you let go. A key pauses it too. No pause while you don't touch anything.
 5. **Spotlight probe (read-only):** `sleep 5; swift tool/macos/spotlight_probe.swift` in Terminal, and press Cmd+Space within 5 s. Record Spotlight's window layer, and confirm the frontmost app stays Terminal. Run it again after Esc: no Spotlight window lines.
-6. **Without the sandbox, for comparison:** remove App Sandbox locally, rebuild, re-grant if asked, repeat 1–5.
+6. **Lost devices, sandboxed (RIN-41):** with **Circle for 8 s** running and a Bluetooth keyboard, mouse or trackpad connected, turn Bluetooth off in Control Center (or unplug a USB mouse): `SessionStopped(localDeviceLost)` at once. The session must not start as `SessionBlocked(localInputUnmonitored)`: that would mean the device watch couldn't arm in the sandbox. No Input Monitoring prompt appears, and the app isn't listed under Privacy & Security → Input Monitoring.
+7. **Without the sandbox, for comparison:** remove App Sandbox locally, rebuild, re-grant if asked, repeat 1–6.
 
 The answer goes into [design.md §7.3](design.md#73-macos), the README's macOS section, and to the first consumer.
 
@@ -209,6 +219,11 @@ Fill in one row per run. Result: pass, fail, or n/a with a reason.
 | C1.1 Build and gtests | Windows (MSVC) | `56aea67` | 2026-10-08 | — | pass | 11 of 12 gtests; `InjectedMoveWithForeignTagIsNotLocalInput` not run (it injects into the live desktop) |
 | C1.4 Local input wins | macOS → Windows | `5be8ca6`, `979dbe2` | 2026-10-08 | the first consumer's call (SFU DataChannels) | fail | Paused within about 0.25 s every time: each injected mouse move reached the hook flagged as injected but without the package's tag. Fixed in RIN-39 |
 | C1.4 Local input wins | macOS → Windows | `56aea67` | 2026-10-08 | the first consumer's call (SFU DataChannels) | pass | About 2 minutes of moves and typing, 1,863 events injected, no pause; a physical move paused control at once (not timed: B5). One 3440×1440 display at 100 % |
+| C1.9 Bluetooth off, before RIN-41 | macOS → Windows (display share) | | | | | expected: control goes on |
+| C1.9 Bluetooth off, after RIN-41, LE device | macOS → Windows (display share) | | | | | expected: `stopped(localDeviceLost)`; record `inputDevices` before and after (design §6.3, verify) |
+| C1.9 Bluetooth off, after RIN-41, classic device | macOS → Windows (display share) | | | | | expected: `stopped(localDeviceLost)`; n/a without one |
+| C2.9 Bluetooth off, before RIN-41 | Windows → macOS (display share) | | | | | expected: control goes on |
+| C2.9 Bluetooth off, after RIN-41 | Windows → macOS (display share) | | | | | expected: `stopped(localDeviceLost)`, no Input Monitoring prompt |
 | A1 Pointer | Windows → macOS | | | | | |
 | A1 Pointer | macOS → Windows | | | | | |
 | A2 Keys | Windows → macOS | | | | | |

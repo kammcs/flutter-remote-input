@@ -6,7 +6,8 @@
 // Dart UI thread. They only use Core Graphics, Carbon's
 // `IsSecureEventInputEnabled`, `NSWorkspace.frontmostApplication` and
 // `NSRunningApplication.runningApplications(withBundleIdentifier:)`, which
-// may be called from any thread.
+// may be called from any thread, and I/O Registry notifications for the
+// device watch (RIN-41).
 //
 // Privacy: nothing here logs. Key codes, text and positions pass through to
 // the OS and nowhere else (docs/design.md §6.6).
@@ -15,6 +16,8 @@ import AppKit
 import Carbon.HIToolbox
 import CoreGraphics
 import Foundation
+import IOKit
+import IOKit.hid
 
 /// Status codes, matched by `MacosStatus` in
 /// lib/src/host/macos/macos_native.dart.
@@ -204,6 +207,110 @@ final class RemoteInputNative {
     lock.lock()
     defer { lock.unlock() }
     return displayGeneration
+  }
+}
+
+/// Counts keyboards and pointing devices that go away (RIN-41,
+/// docs/design.md §6.3): a viewer controlling a display share can turn
+/// Bluetooth off from Control Center, and a presenter on a wireless
+/// keyboard and mouse then has nothing to take control back with. So the
+/// session stops at the first removal.
+///
+/// **No Input Monitoring permission.** This watches the I/O Registry only:
+/// `IOServiceAddMatchingNotification` with `kIOTerminatedNotification` on
+/// `IOHIDDevice` services whose usage pairs include a keyboard, a mouse or
+/// a pointer (generic desktop 6, 2, 1). Nothing opens a device or an
+/// `IOHIDManager` (`IOHIDManagerOpen` and `IOHIDDeviceOpen` on a keyboard
+/// are what ask for Input Monitoring, `kTCCServiceListenEvent`), and no
+/// input value is read. Checked on macOS 27 with an ad-hoc signed probe app
+/// whose Input Monitoring status was "unknown" (never asked) before and
+/// after: the same matching found the keyboards, mice and pointers, the
+/// notifications armed, and the status stayed "unknown", also with the App
+/// Sandbox on.
+///
+/// The notifications are delivered on a private serial queue, which stays
+/// alive with the process; nothing depends on a run loop.
+final class RemoteInputDeviceWatch {
+  static let shared = RemoteInputDeviceWatch()
+
+  private let lock = NSLock()
+  private let queue = DispatchQueue(label: "remote_input.device_watch")
+  private var port: IONotificationPortRef?
+  private var iterators: [io_iterator_t] = []
+  private var tried = false
+  private var armed = false
+  private var removed: Int64 = 0
+
+  /// The generic desktop usages watched: keyboard, mouse, pointer.
+  static let usages: [Int] = [kHIDUsage_GD_Keyboard, kHIDUsage_GD_Mouse, kHIDUsage_GD_Pointer]
+
+  /// Keyboards and pointing devices removed since the watch armed (each
+  /// matching usage of a device counts), or -1 if it couldn't arm. Arms on
+  /// the first call.
+  func removals() -> Int64 {
+    lock.lock()
+    defer { lock.unlock() }
+    if !tried {
+      tried = true
+      armed = arm()
+    }
+    return armed ? removed : -1
+  }
+
+  fileprivate func noteRemoved(_ count: Int64) {
+    lock.lock()
+    removed &+= count
+    lock.unlock()
+  }
+
+  /// Called with [lock] held.
+  private func arm() -> Bool {
+    guard let port = IONotificationPortCreate(kIOMainPortDefault) else { return false }
+    IONotificationPortSetDispatchQueue(port, queue)
+    var armedIterators: [io_iterator_t] = []
+    for usage in RemoteInputDeviceWatch.usages {
+      guard let dictionary = IOServiceMatching(kIOHIDDeviceKey) else {
+        disarm(port, armedIterators)
+        return false
+      }
+      let matching = dictionary as NSMutableDictionary
+      matching[kIOHIDDeviceUsagePageKey] = kHIDPage_GenericDesktop
+      matching[kIOHIDDeviceUsageKey] = usage
+      var iterator: io_iterator_t = 0
+      let kr = IOServiceAddMatchingNotification(
+        port, kIOTerminatedNotification, matching as CFDictionary,
+        { _, iterator in
+          RemoteInputDeviceWatch.shared.noteRemoved(RemoteInputDeviceWatch.drain(iterator))
+        }, nil, &iterator)
+      guard kr == KERN_SUCCESS else {
+        disarm(port, armedIterators)
+        return false
+      }
+      // Draining the iterator arms the notification. Nothing has been
+      // terminated yet, so this counts nothing.
+      _ = RemoteInputDeviceWatch.drain(iterator)
+      armedIterators.append(iterator)
+    }
+    self.port = port
+    iterators = armedIterators
+    return true
+  }
+
+  private func disarm(_ port: IONotificationPortRef, _ armed: [io_iterator_t]) {
+    for iterator in armed { IOObjectRelease(iterator) }
+    IONotificationPortDestroy(port)
+  }
+
+  /// Releases every object [iterator] holds; returns how many there were.
+  fileprivate static func drain(_ iterator: io_iterator_t) -> Int64 {
+    var count: Int64 = 0
+    while true {
+      let service = IOIteratorNext(iterator)
+      if service == 0 { break }
+      IOObjectRelease(service)
+      count += 1
+    }
+    return count
   }
 }
 
@@ -554,6 +661,14 @@ public func remote_input_activity_snapshot(_ out: UnsafeMutablePointer<Double>?)
   }
 }
 
+/// Keyboards and pointing devices removed since the device watch armed (the
+/// first call arms it), or -1 if it couldn't arm (RIN-41; see
+/// `RemoteInputDeviceWatch`). Only grows.
+@_cdecl("remote_input_devices_lost")
+public func remote_input_devices_lost() -> Int64 {
+  RemoteInputDeviceWatch.shared.removals()
+}
+
 /// Keeps the C entry points in the binary: Dart finds them by name with
 /// `dlsym`, which the linker can't see, so dead-code stripping would drop
 /// them from a statically linked plugin. Called from the plugin's
@@ -577,6 +692,7 @@ func remoteInputKeepEntryPoints() -> [UnsafeRawPointer] {
   let secure: @convention(c) () -> Int32 = remote_input_secure_input
   let session: @convention(c) () -> Int32 = remote_input_session_state
   let activity: @convention(c) (UnsafeMutablePointer<Double>?) -> Void = remote_input_activity_snapshot
+  let devicesLost: @convention(c) () -> Int64 = remote_input_devices_lost
   return [
     unsafeBitCast(access, to: UnsafeRawPointer.self),
     unsafeBitCast(mouse, to: UnsafeRawPointer.self),
@@ -593,5 +709,6 @@ func remoteInputKeepEntryPoints() -> [UnsafeRawPointer] {
     unsafeBitCast(secure, to: UnsafeRawPointer.self),
     unsafeBitCast(session, to: UnsafeRawPointer.self),
     unsafeBitCast(activity, to: UnsafeRawPointer.self),
+    unsafeBitCast(devicesLost, to: UnsafeRawPointer.self),
   ]
 }

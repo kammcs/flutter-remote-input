@@ -166,6 +166,15 @@ abstract interface class NativeActivity {
 
   /// The longest single physical move so far, in whole pixels.
   int largestPhysicalStepPx();
+
+  /// Keyboards and mice removed so far, Bluetooth powering off included
+  /// (RIN-41): a counter that only grows. The hook thread reads the raw
+  /// input device list on every heartbeat.
+  int devicesLost();
+
+  /// How many keyboards and mice the hook thread's last read found, or -1
+  /// before a read. For diagnostics.
+  int inputDevices();
 }
 
 /// The native counter's reasons, in `REMOTE_INPUT_REASON_*` order

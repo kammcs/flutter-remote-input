@@ -266,9 +266,16 @@ final class ControlSession {
       );
     }
     _subscriptions.add(reliable.openChanges.listen(_onOpenChanged));
-    final activity = _platform.localActivity?.activity;
-    if (activity != null) {
-      _subscriptions.add(activity.listen((_) => _onLocalActivity()));
+    final monitor = _platform.localActivity;
+    if (monitor != null) {
+      _subscriptions.add(monitor.activity.listen((_) => _onLocalActivity()));
+      if (monitor case final LocalDeviceMonitor devices) {
+        // RIN-41: a removed keyboard or mouse (Bluetooth turned off by the
+        // viewer, say) may be how the presenter would take control back.
+        _subscriptions.add(
+          devices.devicesLost.listen((_) => _stop(StopReason.localDeviceLost)),
+        );
+      }
     }
     if (reliable.isOpen) _onOpenChanged(true);
   }

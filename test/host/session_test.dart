@@ -831,6 +831,69 @@ void main() {
       });
     });
 
+    test('a lost keyboard or mouse stops the session (RIN-41)', () {
+      fakeAsync((async) {
+        final rig = Rig(async);
+        rig.viewer.key(usageA, KeyAction.down);
+        rig.flush();
+        rig.platform.localActivity.simulateDeviceLost();
+        expect(
+          rig.session.state,
+          const SessionStopped(StopReason.localDeviceLost),
+        );
+        expect(rig.events.last, const InjectedKey(usageA, down: false));
+        rig.flush();
+        final last = rig.viewer.states.last;
+        expect(last.state, HostStateCode.stopped);
+        expect(last.reason, StopReason.localDeviceLost.code);
+        // Nothing more is injected.
+        rig.viewer.key(usageB, KeyAction.down);
+        rig.flush();
+        expect(rig.events.last, const InjectedKey(usageA, down: false));
+      });
+    });
+
+    test('a lost device stops a paused or blocked session too', () {
+      fakeAsync((async) {
+        final rig = Rig(async);
+        rig.session.pause();
+        rig.platform.localActivity.simulateDeviceLost();
+        expect(
+          rig.session.state,
+          const SessionStopped(StopReason.localDeviceLost),
+        );
+      });
+      fakeAsync((async) {
+        final rig = Rig(async);
+        rig.platform.localActivity.healthy = false;
+        rig.viewer.key(usageA, KeyAction.down);
+        rig.flush();
+        expect(
+          rig.session.state,
+          const SessionBlocked(BlockReason.localInputUnmonitored),
+        );
+        rig.platform.localActivity.simulateDeviceLost();
+        expect(
+          rig.session.state,
+          const SessionStopped(StopReason.localDeviceLost),
+        );
+      });
+    });
+
+    test('a device lost while no session is live does nothing', () {
+      fakeAsync((async) {
+        final platform = FakeHostPlatform();
+        platform.localActivity.simulateDeviceLost();
+        final rig = Rig(async, platform: platform);
+        expect(rig.session.state, const SessionActive());
+        rig.session.stop();
+        platform.localActivity.simulateDeviceLost();
+        expect(rig.session.state, const SessionStopped(StopReason.byHost));
+        final next = Rig(async, platform: platform);
+        expect(next.session.state, const SessionActive());
+      });
+    });
+
     test('the host app can pause and resume', () {
       fakeAsync((async) {
         final rig = Rig(async);

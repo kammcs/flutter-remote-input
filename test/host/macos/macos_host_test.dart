@@ -628,6 +628,43 @@ void main() {
       });
     });
 
+    test('a removed keyboard or mouse emits on devicesLost (RIN-41)', () {
+      fakeAsync((async) {
+        // Removals before monitoring started don't count.
+        native.lost = 4;
+        final monitor = MacosLocalActivity(native);
+        var lost = 0;
+        var local = 0;
+        monitor.devicesLost.listen((_) => lost++);
+        final sub = monitor.activity.listen((_) => local++);
+        expect(monitor.isMonitoring, isTrue);
+        async.elapse(const Duration(milliseconds: 50));
+        expect(lost, 0);
+        native.lost += 2;
+        async.elapse(const Duration(milliseconds: 10));
+        expect(lost, 1);
+        expect(local, 0);
+        async.elapse(const Duration(milliseconds: 50));
+        expect(lost, 1);
+        sub.cancel();
+        expect(monitor.isMonitoring, isFalse);
+        native.lost += 1;
+        async.elapse(const Duration(milliseconds: 50));
+        expect(lost, 1);
+      });
+    });
+
+    test('a device watch that could not arm is not monitoring', () {
+      fakeAsync((async) {
+        native.lost = -1;
+        final monitor = MacosLocalActivity(native);
+        final sub = monitor.activity.listen((_) {});
+        async.elapse(const Duration(milliseconds: 20));
+        expect(monitor.isMonitoring, isFalse);
+        sub.cancel();
+      });
+    });
+
     test('injected moves are not local input', () {
       fakeAsync((async) {
         final platform = MacosHostPlatform(native);
@@ -701,6 +738,42 @@ void main() {
         native.hid = const MacosActivityCounts(buttonDowns: 1);
         async.elapse(const Duration(milliseconds: 10));
         expect(session.state, const SessionPaused(PauseReason.localInput));
+        session.stop();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('Bluetooth turned off stops the session (RIN-41)', () {
+      fakeAsync((async) {
+        final pair = MemoryInputLink.pair();
+        final session = RemoteInputHost(platform: MacosHostPlatform(native))
+            .enable(link: pair.host, surface: const SharedSurface.display(1));
+        final viewer = RemoteInputViewer(link: pair.viewer);
+        async.elapse(const Duration(milliseconds: 20));
+        expect(session.state, const SessionActive());
+        native.lost += 3; // keyboard, mouse and pointer usages
+        async.elapse(const Duration(milliseconds: 10));
+        expect(session.state, const SessionStopped(StopReason.localDeviceLost));
+        async.elapse(const Duration(milliseconds: 10));
+        expect(viewer.state, const SessionStopped(StopReason.localDeviceLost));
+      });
+    });
+
+    test('without the device watch, nothing is injected', () {
+      fakeAsync((async) {
+        native.lost = -1;
+        final pair = MemoryInputLink.pair();
+        final session = RemoteInputHost(platform: MacosHostPlatform(native))
+            .enable(link: pair.host, surface: const SharedSurface.display(1));
+        final viewer = RemoteInputViewer(link: pair.viewer);
+        async.elapse(const Duration(milliseconds: 20));
+        viewer.click(const Offset(0.5, 0.5));
+        async.elapse(const Duration(milliseconds: 20));
+        expect(native.mouse, isEmpty);
+        expect(
+          session.state,
+          const SessionBlocked(BlockReason.localInputUnmonitored),
+        );
         session.stop();
         async.flushMicrotasks();
       });

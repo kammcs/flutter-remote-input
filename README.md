@@ -83,6 +83,7 @@ The package injects input into someone's computer, so:
 - **Off by default.** Nothing is injected until your app explicitly enables a session, for one viewer, one link and one shared screen or window.
 - **Instant stop.** `stop()` is synchronous; afterwards the package only releases keys and buttons it was holding. `stopAll()` is there for a global revoke hotkey.
 - **Local input wins.** When the presenter touches their own mouse or keyboard, injection pauses at once.
+- **A lost keyboard or mouse ends control.** If a keyboard or pointing device of the presenter goes away, Bluetooth switched off included (a viewer could do that from Control Center or the Windows quick settings), the session stops (`StopReason.localDeviceLost`). Let presenters revoke from another device too, such as their phone.
 - **Rate limits and bounds checks** on every message. Input can't address anything outside the shared surface.
 - **No elevated or secure contexts.** It won't drive administrator apps or UAC prompts on Windows, or type into password fields on macOS. It reports when it's blocked.
 - **No logging of what anyone types.**

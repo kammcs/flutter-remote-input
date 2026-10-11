@@ -174,6 +174,12 @@ final class FakeMacosNative implements MacosNative {
     return session;
   }
 
+  /// Devices removed so far, or -1 for a watch that couldn't arm.
+  int lost = 0;
+
+  @override
+  int devicesLost() => lost;
+
   @override
   MacosActivitySnapshot activitySnapshot() {
     snapshots++;

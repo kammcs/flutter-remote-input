@@ -248,6 +248,18 @@ final class FakeNativeActivity implements NativeActivity {
 
   @override
   int largestPhysicalStepPx() => largestStep;
+
+  /// Keyboards and mice removed so far (RIN-41).
+  int lost = 0;
+
+  /// Keyboards and mice at the last read, or -1.
+  int devices = -1;
+
+  @override
+  int devicesLost() => lost;
+
+  @override
+  int inputDevices() => devices;
 }
 
 /// Decodes an array of `INPUT` records, as Windows would read it.

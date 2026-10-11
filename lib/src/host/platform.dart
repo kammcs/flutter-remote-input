@@ -131,6 +131,25 @@ abstract interface class LocalActivityMonitor {
   bool get isMonitoring;
 }
 
+/// A [LocalActivityMonitor] that also sees the host's keyboards and
+/// pointing devices go away (`docs/design.md` §6.3, RIN-41). A separate
+/// interface, so monitors without it still implement [LocalActivityMonitor]
+/// alone.
+///
+/// A viewer controlling a display share can turn the presenter's Bluetooth
+/// off (Control Center, the Windows quick settings) without any permission.
+/// A presenter on a wireless keyboard and mouse then loses local input
+/// wins, the app's revoke hotkey and its Stop button. So a session whose
+/// monitor implements this stops with `StopReason.localDeviceLost` at the
+/// first removal.
+abstract interface class LocalDeviceMonitor {
+  /// An event for each keyboard, mouse, trackpad or other pointing device
+  /// removed or disconnected, Bluetooth powering off included. Watched
+  /// while [LocalActivityMonitor.activity] has a listener: a removal before
+  /// that doesn't count.
+  Stream<void> get devicesLost;
+}
+
 /// A [LocalActivityMonitor] that can say why it reported local input. A
 /// separate interface, so monitors without it still implement
 /// [LocalActivityMonitor] alone.

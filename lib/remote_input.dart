@@ -36,6 +36,7 @@ export 'src/host/platform.dart'
         InputInjector,
         InputKind,
         LocalActivityMonitor,
+        LocalDeviceMonitor,
         LocalInputDiagnostics,
         SecureContextProbe,
         SurfaceResolver;
