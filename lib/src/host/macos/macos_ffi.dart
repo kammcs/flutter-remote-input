@@ -83,6 +83,10 @@ const int _maxDisplays = 32;
 /// (front to back, so any beyond are the backmost).
 const int _maxAbove = 512;
 
+/// Doubles per window record (`remoteInputWindowRecordSize` in the Swift):
+/// owner pid, layer, alpha, x, y, width, height, click-through.
+const int _recordSize = 8;
+
 /// The most keyboard-panel processes read at once.
 const int _maxPanelPids = 8;
 
@@ -159,7 +163,9 @@ final class FfiMacosNative implements MacosNative {
   final Pointer<Uint16> _textBuffer = calloc<Uint16>(20);
   final Pointer<Double> _small = calloc<Double>(16);
   final Pointer<Double> _displayBuffer = calloc<Double>(_maxDisplays * 7);
-  final Pointer<Double> _windowBuffer = calloc<Double>(7 + _maxAbove * 7);
+  final Pointer<Double> _windowBuffer = calloc<Double>(
+    7 + _maxAbove * _recordSize,
+  );
   final Pointer<Int32> _pidBuffer = calloc<Int32>(_maxPanelPids);
 
   @override
@@ -254,19 +260,20 @@ final class FfiMacosNative implements MacosNative {
     return _records(b, count);
   }
 
-  /// [count] window records of 7 doubles each at [b].
+  /// [count] window records of [_recordSize] doubles each at [b].
   static List<MacosWindowRecord> _records(Pointer<Double> b, int count) => [
     for (var i = 0; i < count; i++)
       MacosWindowRecord(
-        ownerPid: b[i * 7].toInt(),
-        layer: b[i * 7 + 1].toInt(),
-        alpha: b[i * 7 + 2],
+        ownerPid: b[i * _recordSize].toInt(),
+        layer: b[i * _recordSize + 1].toInt(),
+        alpha: b[i * _recordSize + 2],
         bounds: Rect.fromLTWH(
-          b[i * 7 + 3],
-          b[i * 7 + 4],
-          b[i * 7 + 5],
-          b[i * 7 + 6],
+          b[i * _recordSize + 3],
+          b[i * _recordSize + 4],
+          b[i * _recordSize + 5],
+          b[i * _recordSize + 6],
         ),
+        clickThrough: b[i * _recordSize + 7] != 0,
       ),
   ];
 

@@ -63,8 +63,9 @@ REMOTE_INPUT_NATIVE_EXPORT int32_t remote_input_activity_hooks_installed(void);
 
 // Why remote_input_activity_count grew, for diagnostics: counts only.
 //
-// - MISSED: a stall of the hook thread during which Windows recorded input
-//   the hooks never saw.
+// - MISSED: a stall of the hook thread longer than LowLevelHooksTimeout
+//   (RIN-46), or a shorter one during which Windows recorded input the
+//   hooks never saw.
 // - KEY, BUTTON (buttons and wheel notches), MOVE (a burst of physical
 //   movement past the threshold): input no software injected.
 // - STALL: every heartbeat gap over 200 ms, whether or not it hid input.
@@ -129,12 +130,56 @@ namespace remote_input {
 size_t RemovedDevices(const uintptr_t* before, size_t before_count,
                       const uintptr_t* after, size_t after_count);
 
-// Whether a stall of the hook thread hid input from the hooks: Windows'
-// last-input time [last_input] is more than a clock tick later than the
-// newest event the hooks saw, [last_seen] (both GetTickCount()). Fails
-// closed: true when the last-input time isn't known. Exposed for the tests.
-bool StallMissedInput(bool last_input_known, uint32_t last_input,
-                      uint32_t last_seen);
+// What HKCU\Control Panel\Desktop\LowLevelHooksTimeout held (RIN-46).
+enum class HooksTimeoutSetting {
+  // The value isn't there: Windows uses its default.
+  kAbsent,
+  // A number of milliseconds.
+  kValue,
+  // There, but not a number, or the key couldn't be read.
+  kUnreadable,
+};
+
+// The LowLevelHooksTimeout Windows applies, in milliseconds, for what the
+// registry held ([value] only for kValue): the value, capped at 1000 (the
+// documented cap from Windows 10 1709); 300 when absent (the reported
+// default, which Microsoft doesn't document); and 200, the stall threshold,
+// for an unreadable value or 0, so every stall counts (fails closed).
+// Exposed for the tests.
+uint32_t EffectiveHooksTimeout(HooksTimeoutSetting setting, uint32_t value);
+
+// Parses a REG_SZ LowLevelHooksTimeout: decimal digits, spaces around them
+// allowed, at most 2^32 - 1. False for anything else. Exposed for the
+// tests.
+bool ParseHooksTimeout(const wchar_t* text, uint32_t* out);
+
+// What the hook thread knows after a stall (a heartbeat gap over 200 ms).
+// Times are GetTickCount() values.
+struct StallEvidence {
+  // The heartbeat gap, in milliseconds.
+  uint64_t gap_ms = 0;
+  // The effective LowLevelHooksTimeout (EffectiveHooksTimeout).
+  uint32_t hooks_timeout_ms = 0;
+  // Whether GetLastInputInfo succeeded, and its time: the newest input of
+  // any kind, injected included.
+  bool last_input_known = false;
+  uint32_t last_input = 0;
+  // The newest physical and the newest injected event the hooks saw.
+  uint32_t last_physical = 0;
+  uint32_t last_injected = 0;
+};
+
+// Whether a stall of the hook thread may have hidden input from the hooks,
+// so it counts as local input:
+// - a gap longer than the hooks timeout always does (RIN-46): Windows may
+//   have skipped or removed the hooks, and a later injected event, seen by
+//   the hooks and recorded by GetLastInputInfo, would hide a physical event
+//   they never got;
+// - a shorter one does when the last-input time is more than a clock tick
+//   later than the newest event the hooks saw, physical or injected
+//   (RIN-39), or isn't known (fails closed).
+// Exposed for the tests.
+bool StallMissedInput(const StallEvidence& evidence);
 
 }  // namespace remote_input
 #endif

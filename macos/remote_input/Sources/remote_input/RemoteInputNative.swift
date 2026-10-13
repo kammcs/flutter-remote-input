@@ -7,7 +7,9 @@
 // `IsSecureEventInputEnabled`, `NSWorkspace.frontmostApplication` and
 // `NSRunningApplication.runningApplications(withBundleIdentifier:)`, which
 // may be called from any thread, and I/O Registry notifications for the
-// device watch (RIN-41).
+// device watch (RIN-41). The one exception, AppKit's own window list (which
+// of this process's windows are click-through, RIN-47), is read only on the
+// main thread, where the Dart UI thread runs by default.
 //
 // Privacy: nothing here logs. Key codes, text and positions pass through to
 // the OS and nowhere else (docs/design.md §6.6).
@@ -515,10 +517,10 @@ public func remote_input_display_generation() -> Int64 {
 /// it. No titles are read, so no Screen Recording permission is needed.
 ///
 /// Writes a header of 7 doubles to [out] (x, y, width, height, on screen
-/// 0/1, owner pid, scale), then up to [capacity] records of 7 doubles for
-/// the windows above it, front to back (owner pid, layer, alpha, x, y,
-/// width, height). Returns the number of records written, or -1 if the
-/// window is gone.
+/// 0/1, owner pid, scale), then up to [capacity] records of
+/// `remoteInputWindowRecordSize` doubles for the windows above it, front to
+/// back (see `remoteInputWriteRecords`). Returns the number of records
+/// written, or -1 if the window is gone.
 @_cdecl("remote_input_window_info")
 public func remote_input_window_info(
   _ windowId: UInt32, _ out: UnsafeMutablePointer<Double>?, _ capacity: Int32
@@ -544,17 +546,43 @@ public func remote_input_window_info(
   return remoteInputWriteRecords(above, out + 7, capacity)
 }
 
-/// Writes up to [capacity] window records of 7 doubles to [out] (owner pid,
-/// layer, alpha, x, y, width, height), in the list's order. Returns how
-/// many were written.
+/// Doubles per window record, matched by `_recordSize` in
+/// lib/src/host/macos/macos_ffi.dart.
+let remoteInputWindowRecordSize = 8
+
+/// The window numbers of this process's windows that ignore mouse events
+/// (click-through, like a border drawn over a shared surface), from AppKit
+/// (RIN-47). AppKit's window list may only be read on the main thread,
+/// which is where Dart calls from under Flutter's merged platform and UI
+/// threads (the default on macOS). On another thread it's empty: none of
+/// the process's windows counts as click-through, which fails closed (a
+/// click-through border then blocks the clicks under it).
+func remoteInputOwnClickThroughWindows() -> Set<Int> {
+  guard Thread.isMainThread else { return [] }
+  return MainActor.assumeIsolated {
+    guard let app = NSApp else { return [] }
+    var numbers = Set<Int>()
+    for window in app.windows where window.ignoresMouseEvents {
+      numbers.insert(window.windowNumber)
+    }
+    return numbers
+  }
+}
+
+/// Writes up to [capacity] window records of `remoteInputWindowRecordSize`
+/// doubles to [out] (owner pid, layer, alpha, x, y, width, height, and 1 if
+/// it's this process's window and ignores mouse events, else 0), in the
+/// list's order. Returns how many were written.
 func remoteInputWriteRecords(
   _ windows: [[String: Any]], _ out: UnsafeMutablePointer<Double>, _ capacity: Int32
 ) -> Int32 {
+  let ownPid = Double(getpid())
+  var clickThrough: Set<Int>?
   var written: Int32 = 0
   for window in windows {
     if written >= capacity { break }
     guard let rect = remoteInputRect(window[kCGWindowBounds as String]) else { continue }
-    let base = out + Int(written) * 7
+    let base = out + Int(written) * remoteInputWindowRecordSize
     base[0] = (window[kCGWindowOwnerPID as String] as? NSNumber)?.doubleValue ?? -1
     base[1] = (window[kCGWindowLayer as String] as? NSNumber)?.doubleValue ?? 0
     base[2] = (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
@@ -562,14 +590,20 @@ func remoteInputWriteRecords(
     base[4] = Double(rect.origin.y)
     base[5] = Double(rect.width)
     base[6] = Double(rect.height)
+    base[7] = 0
+    if base[0] == ownPid, let number = (window[kCGWindowNumber as String] as? NSNumber)?.intValue {
+      // Read once per list, and only when it has a window of this process.
+      if clickThrough == nil { clickThrough = remoteInputOwnClickThroughWindows() }
+      if clickThrough?.contains(number) == true { base[7] = 1 }
+    }
     written += 1
   }
   return written
 }
 
 /// Writes every on-screen window, front to back, to [out]: up to
-/// [capacity] records of 7 doubles, the same as `remote_input_window_info`
-/// writes for the windows above a window. Returns the number written, or -1
+/// [capacity] records, the same as `remote_input_window_info` writes for
+/// the windows above a window. Returns the number written, or -1
 /// if the list can't be read. No titles are read, so no Screen Recording
 /// permission is needed. About 0.3 to 0.6 ms with 25 windows (macOS 27).
 @_cdecl("remote_input_window_list")

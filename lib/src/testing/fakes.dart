@@ -295,6 +295,13 @@ final class FakeSurfaceResolver implements SurfaceResolver {
   /// Whether the host app is in front.
   bool ownAppInFront = false;
 
+  /// How many times the session asked for fresh window reads
+  /// ([refreshWindows]): once per button press it checked.
+  int windowRefreshes = 0;
+
+  @override
+  void refreshWindows() => windowRefreshes++;
+
   @override
   bool isOwnWindowAt(Offset point) => ownWindowAt?.call(point) ?? false;
 

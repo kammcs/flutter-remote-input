@@ -237,4 +237,12 @@ abstract interface class SurfaceResolver {
   /// Whether the host app's own process is in front, so keys typed now would
   /// go to it.
   bool isOwnAppInFront();
+
+  /// Drops any cached window bounds, occluders and window lists, so the
+  /// next [resolve], [isOnSurface] and [isOwnWindowAt] read them from the
+  /// OS. The session calls it before it checks a button press (RIN-56): a
+  /// window that appeared over the shared one within the cache's lifetime
+  /// must not take the click. Resolvers that read the OS every time do
+  /// nothing.
+  void refreshWindows();
 }

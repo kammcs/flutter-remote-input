@@ -91,12 +91,22 @@ constexpr DWORD kMoveGapMs = 100;
 //   instead of failing open.
 // - A tick more than kStallMs after the previous one means the thread was
 //   stalled, long enough that Windows may have dropped its hooks. The hooks
-//   are installed again, and the stall counts as local input only if input
-//   in it went unseen: Windows recorded input (GetLastInputInfo) later than
-//   the newest event the hooks saw (RIN-39). A stall alone isn't local
-//   input: under load (a full-screen share being encoded, a stream of
-//   injected events) the timer can run late with nobody at the machine. An
-//   event the hooks got late, within LowLevelHooksTimeout, was still seen.
+//   are installed again, and whether the stall counts as local input
+//   depends on its length (remote_input::StallMissedInput):
+//   - Longer than the effective LowLevelHooksTimeout (RIN-46): it always
+//     counts. Windows may have skipped the hooks for input in it (and,
+//     since Windows 7, removed them), and nothing afterwards shows whether
+//     that input was physical: GetLastInputInfo advances for injected input
+//     too, and the re-installed hooks see a viewer's injected events again,
+//     so a later injected event would hide a physical one the hooks never
+//     got.
+//   - Shorter: Windows held each event until the hook returned, so the
+//     hooks saw everything, late. It counts only if input in it went
+//     unseen anyway: Windows recorded input (GetLastInputInfo) later than
+//     the newest event the hooks saw, physical or injected (RIN-39). A
+//     stall alone isn't local input: under load (a full-screen share being
+//     encoded, a stream of injected events) the timer can run late with
+//     nobody at the machine.
 // - The hooks are installed again every kRehookMs anyway, in case one was
 //   removed without a stall the timer could see. New hooks go in before the
 //   old ones come out, so there's no gap.
@@ -111,6 +121,21 @@ constexpr ULONGLONG kRehookMs = 15000;
 // be and still be that event: both come from GetTickCount(), whose
 // resolution is about 16 ms.
 constexpr DWORD kSeenSlackMs = 16;
+
+// The effective LowLevelHooksTimeout (RIN-46), from
+// HKCU\Control Panel\Desktop\LowLevelHooksTimeout, read when the hook
+// thread starts (remote_input::EffectiveHooksTimeout):
+// - Present: its value, capped at kHooksTimeoutCapMs. Microsoft documents
+//   that cap for Windows 10 1709 and later; on 1703, which has none, a
+//   larger value is still taken as 1000 ms, which only counts more stalls.
+// - Absent (the usual case): kHooksTimeoutDefaultMs. Microsoft doesn't
+//   document a default; 300 ms is what Windows 7 and later are reported to
+//   use without the value (AutoHotkey's and LibreAutomate's docs).
+// - Unreadable (another type, zero, not a number, an error): kStallMs, so
+//   every stall counts, as before RIN-39. Fails closed.
+constexpr uint32_t kHooksTimeoutCapMs = 1000;
+constexpr uint32_t kHooksTimeoutDefaultMs = 300;
+constexpr uint32_t kHooksTimeoutUnknownMs = static_cast<uint32_t>(kStallMs);
 
 // --- Lost input devices (RIN-41, docs/design.md §6.3) -----------------------
 //
@@ -193,7 +218,12 @@ ULONGLONG g_last_hooked = 0;
 POINT g_previous = {0, 0};  // The previous mouse event's position.
 double g_path = 0;          // Physical travel in the current path, pixels.
 DWORD g_path_time = 0;      // GetTickCount() at its last physical move.
-DWORD g_last_seen = 0;      // The newest hooked event's time, tagged or not.
+// The newest hooked event's time (GetTickCount()), physical and injected
+// kept apart (RIN-46).
+DWORD g_last_physical = 0;
+DWORD g_last_injected = 0;
+// The effective LowLevelHooksTimeout, in milliseconds (RIN-46).
+uint32_t g_hooks_timeout = kHooksTimeoutUnknownMs;
 
 // The keyboards' and mice's raw input handles at the last read, and whether
 // there was one. The hook thread's, and stop's once the thread has joined.
@@ -209,13 +239,46 @@ uint64_t Tag() {
   return tag;
 }
 
-// Records that the hooks saw an event stamped [time] (GetTickCount()).
-// Capped at now: software injecting with a future timestamp mustn't hide
-// a later stall's missed input.
-void Seen(DWORD time) {
+// Records that the hooks saw an event stamped [time] (GetTickCount()),
+// [injected] or physical. Capped at now: software injecting with a future
+// timestamp mustn't hide a later stall's missed input.
+void Seen(DWORD time, bool injected) {
   const DWORD now = GetTickCount();
   if (static_cast<LONG>(time - now) > 0) time = now;
-  if (static_cast<LONG>(time - g_last_seen) > 0) g_last_seen = time;
+  DWORD& last = injected ? g_last_injected : g_last_physical;
+  if (static_cast<LONG>(time - last) > 0) last = time;
+}
+
+// Reads HKCU\Control Panel\Desktop\LowLevelHooksTimeout, a REG_DWORD or a
+// REG_SZ of decimal digits (as most values under that key are), and
+// returns the effective timeout.
+uint32_t ReadHooksTimeout() {
+  const wchar_t* key = L"Control Panel\\Desktop";
+  const wchar_t* name = L"LowLevelHooksTimeout";
+  DWORD value = 0;
+  DWORD size = sizeof(value);
+  LSTATUS status = RegGetValueW(HKEY_CURRENT_USER, key, name, RRF_RT_REG_DWORD,
+                                nullptr, &value, &size);
+  if (status == ERROR_SUCCESS) {
+    return remote_input::EffectiveHooksTimeout(
+        remote_input::HooksTimeoutSetting::kValue, value);
+  }
+  if (status == ERROR_FILE_NOT_FOUND) {
+    return remote_input::EffectiveHooksTimeout(
+        remote_input::HooksTimeoutSetting::kAbsent, 0);
+  }
+  wchar_t text[16] = {};
+  size = sizeof(text);
+  status = RegGetValueW(HKEY_CURRENT_USER, key, name,
+                        RRF_RT_REG_SZ | RRF_NOEXPAND, nullptr, text, &size);
+  uint32_t parsed = 0;
+  if (status == ERROR_SUCCESS &&
+      remote_input::ParseHooksTimeout(text, &parsed)) {
+    return remote_input::EffectiveHooksTimeout(
+        remote_input::HooksTimeoutSetting::kValue, parsed);
+  }
+  return remote_input::EffectiveHooksTimeout(
+      remote_input::HooksTimeoutSetting::kUnreadable, 0);
 }
 
 bool IsInjected(DWORD flags, DWORD injected_flag) {
@@ -256,7 +319,7 @@ bool PhysicalMoveCounts(POINT pt) {
 LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
   if (code == HC_ACTION) {
     const auto* info = reinterpret_cast<const MSLLHOOKSTRUCT*>(data);
-    Seen(info->time);
+    Seen(info->time, IsInjected(info->flags, LLMHF_INJECTED));
     if (message == WM_MOUSEMOVE) {
       g_move_origins[MoveOrigin(info->flags, LLMHF_INJECTED,
                                 info->dwExtraInfo)]
@@ -278,7 +341,7 @@ LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data) {
 LRESULT CALLBACK KeyboardHook(int code, WPARAM message, LPARAM data) {
   if (code == HC_ACTION) {
     const auto* info = reinterpret_cast<const KBDLLHOOKSTRUCT*>(data);
-    Seen(info->time);
+    Seen(info->time, IsInjected(info->flags, LLKHF_INJECTED));
     if (!IsInjected(info->flags, LLKHF_INJECTED)) {
       Count(REMOTE_INPUT_REASON_KEY);
     }
@@ -372,11 +435,17 @@ void OnHeartbeat() {
   if (stalled) {
     Count(REMOTE_INPUT_REASON_STALL);
     // Hook calls queued during the stall ran before this timer message, so
-    // g_last_seen is up to date. If the last-input time can't be read, the
-    // stall counts (fail closed).
+    // the last-seen times are up to date. If the last-input time can't be
+    // read, the stall counts (fail closed).
     LASTINPUTINFO last = {sizeof(LASTINPUTINFO), 0};
-    const bool known = GetLastInputInfo(&last) != FALSE;
-    if (remote_input::StallMissedInput(known, last.dwTime, g_last_seen)) {
+    remote_input::StallEvidence evidence;
+    evidence.gap_ms = gap;
+    evidence.hooks_timeout_ms = g_hooks_timeout;
+    evidence.last_input_known = GetLastInputInfo(&last) != FALSE;
+    evidence.last_input = last.dwTime;
+    evidence.last_physical = g_last_physical;
+    evidence.last_injected = g_last_injected;
+    if (remote_input::StallMissedInput(evidence)) {
       Count(REMOTE_INPUT_REASON_MISSED);
     }
   }
@@ -403,7 +472,9 @@ DWORD WINAPI HookThread(LPVOID) {
   g_path = 0;
   g_path_time = GetTickCount();
   // Input before monitoring started isn't unseen input.
-  g_last_seen = GetTickCount();
+  g_last_physical = GetTickCount();
+  g_last_injected = g_last_physical;
+  g_hooks_timeout = ReadHooksTimeout();
   // The devices now: a baseline, or (after a thread that exited on its own)
   // the removals while it was gone.
   CheckInputDevices();
@@ -464,11 +535,49 @@ size_t RemovedDevices(const uintptr_t* before, size_t before_count,
   return removed;
 }
 
-bool StallMissedInput(bool last_input_known, uint32_t last_input,
-                      uint32_t last_seen) {
-  if (!last_input_known) return true;
-  // Signed, so GetTickCount()'s wrap after 49.7 days compares right.
-  return static_cast<int32_t>(last_input - last_seen) >
+uint32_t EffectiveHooksTimeout(HooksTimeoutSetting setting, uint32_t value) {
+  switch (setting) {
+    case HooksTimeoutSetting::kAbsent:
+      return kHooksTimeoutDefaultMs;
+    case HooksTimeoutSetting::kValue:
+      if (value == 0) return kHooksTimeoutUnknownMs;
+      return value > kHooksTimeoutCapMs ? kHooksTimeoutCapMs : value;
+    case HooksTimeoutSetting::kUnreadable:
+      break;
+  }
+  return kHooksTimeoutUnknownMs;
+}
+
+bool ParseHooksTimeout(const wchar_t* text, uint32_t* out) {
+  if (text == nullptr || out == nullptr) return false;
+  // Spaces around the digits are tolerated; nothing else is.
+  while (*text == L' ') text++;
+  uint64_t value = 0;
+  int digits = 0;
+  while (*text >= L'0' && *text <= L'9') {
+    value = value * 10 + static_cast<uint64_t>(*text - L'0');
+    if (value > 0xFFFFFFFFull) return false;
+    text++;
+    digits++;
+  }
+  while (*text == L' ') text++;
+  if (digits == 0 || *text != L'\0') return false;
+  *out = static_cast<uint32_t>(value);
+  return true;
+}
+
+bool StallMissedInput(const StallEvidence& e) {
+  // Long enough that Windows may have skipped (and removed) the hooks:
+  // input in it can't be shown to have been seen (RIN-46).
+  if (e.gap_ms > e.hooks_timeout_ms) return true;
+  if (!e.last_input_known) return true;
+  // The newest event the hooks saw, of either kind. Signed differences, so
+  // GetTickCount()'s wrap after 49.7 days compares right.
+  const uint32_t newest =
+      static_cast<int32_t>(e.last_physical - e.last_injected) > 0
+          ? e.last_physical
+          : e.last_injected;
+  return static_cast<int32_t>(e.last_input - newest) >
          static_cast<int32_t>(kSeenSlackMs);
 }
 

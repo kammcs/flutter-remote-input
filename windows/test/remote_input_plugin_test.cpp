@@ -53,26 +53,102 @@ TEST(RemoteInputNative, HealthFollowsTheHookThread) {
   EXPECT_EQ(remote_input_activity_heartbeat_age(), -1);
 }
 
-// RIN-39: a stall alone isn't local input. Only input the hooks never saw
-// is.
+// A stall of [gap] ms with the default hooks timeout (300 ms), after which
+// Windows' last input is [last_input] and the hooks' newest physical and
+// injected events are [physical] and [injected].
+static remote_input::StallEvidence Stall(uint64_t gap, uint32_t last_input,
+                                         uint32_t physical, uint32_t injected,
+                                         bool known = true) {
+  remote_input::StallEvidence e;
+  e.gap_ms = gap;
+  e.hooks_timeout_ms = 300;
+  e.last_input_known = known;
+  e.last_input = last_input;
+  e.last_physical = physical;
+  e.last_injected = injected;
+  return e;
+}
+
+// RIN-39: a stall within the hooks timeout isn't local input by itself.
+// Only input the hooks never saw is.
 TEST(RemoteInputNative, StallWithEverythingSeenIsNotLocalInput) {
   // The newest input is the injected event the hooks got, late.
-  EXPECT_FALSE(remote_input::StallMissedInput(true, 5000, 5000));
+  EXPECT_FALSE(remote_input::StallMissedInput(Stall(250, 5000, 1000, 5000)));
+  // ... or a physical one.
+  EXPECT_FALSE(remote_input::StallMissedInput(Stall(250, 5000, 5000, 1000)));
   // No input at all since the hooks' last event.
-  EXPECT_FALSE(remote_input::StallMissedInput(true, 4000, 5000));
+  EXPECT_FALSE(remote_input::StallMissedInput(Stall(250, 4000, 5000, 3000)));
   // The same event, a clock tick apart.
-  EXPECT_FALSE(remote_input::StallMissedInput(true, 5016, 5000));
+  EXPECT_FALSE(remote_input::StallMissedInput(Stall(250, 5016, 1000, 5000)));
+  // Exactly the timeout is still within it.
+  EXPECT_FALSE(remote_input::StallMissedInput(Stall(300, 5000, 5000, 5000)));
 }
 
 TEST(RemoteInputNative, StallThatHidInputIsLocalInput) {
-  EXPECT_TRUE(remote_input::StallMissedInput(true, 5300, 5000));
-  // Across GetTickCount()'s wrap.
-  EXPECT_TRUE(remote_input::StallMissedInput(true, 200, 0xFFFFFF00u));
-  EXPECT_FALSE(remote_input::StallMissedInput(true, 0xFFFFFF00u, 200));
+  EXPECT_TRUE(remote_input::StallMissedInput(Stall(250, 5300, 5000, 4000)));
+  EXPECT_TRUE(remote_input::StallMissedInput(Stall(250, 5300, 4000, 5000)));
+  // Across GetTickCount()'s wrap, for either kind.
+  const uint32_t a = 0xFFFFFF00u;
+  const uint32_t b = 0xFFFFFE00u;
+  EXPECT_TRUE(remote_input::StallMissedInput(Stall(250, 200, a, b)));
+  EXPECT_TRUE(remote_input::StallMissedInput(Stall(250, 200, b, a)));
+  EXPECT_FALSE(remote_input::StallMissedInput(Stall(250, a, 200, b)));
+  EXPECT_FALSE(remote_input::StallMissedInput(Stall(250, a, b, 200)));
 }
 
 TEST(RemoteInputNative, StallFailsClosedWithoutLastInputTime) {
-  EXPECT_TRUE(remote_input::StallMissedInput(false, 0, 5000));
+  EXPECT_TRUE(
+      remote_input::StallMissedInput(Stall(250, 0, 5000, 5000, false)));
+}
+
+// RIN-46: past the hooks timeout, Windows may have skipped the hooks for a
+// physical event, and an injected event after it (seen by the re-installed
+// hooks, and recorded by GetLastInputInfo too) would hide it. So such a
+// stall always counts.
+TEST(RemoteInputNative, StallLongerThanTheHooksTimeoutIsLocalInput) {
+  // The masking case: the last input is the viewer's injected event, which
+  // the hooks saw; the presenter's key in the stall was never hooked.
+  EXPECT_TRUE(remote_input::StallMissedInput(Stall(301, 5000, 1000, 5000)));
+  // Nothing at all seemed to be missed: it still counts.
+  EXPECT_TRUE(remote_input::StallMissedInput(Stall(1500, 4000, 5000, 5000)));
+  // With the timeout capped at 1000 ms.
+  remote_input::StallEvidence e = Stall(1001, 5000, 5000, 5000);
+  e.hooks_timeout_ms = 1000;
+  EXPECT_TRUE(remote_input::StallMissedInput(e));
+  e.gap_ms = 900;
+  EXPECT_FALSE(remote_input::StallMissedInput(e));
+}
+
+TEST(RemoteInputNative, HooksTimeoutFollowsTheRegistry) {
+  using remote_input::EffectiveHooksTimeout;
+  using remote_input::HooksTimeoutSetting;
+  EXPECT_EQ(EffectiveHooksTimeout(HooksTimeoutSetting::kValue, 250), 250u);
+  EXPECT_EQ(EffectiveHooksTimeout(HooksTimeoutSetting::kValue, 1000), 1000u);
+  // Windows 10 1709 and later cap it at 1000 ms.
+  EXPECT_EQ(EffectiveHooksTimeout(HooksTimeoutSetting::kValue, 5000), 1000u);
+  // Absent: the reported default.
+  EXPECT_EQ(EffectiveHooksTimeout(HooksTimeoutSetting::kAbsent, 0), 300u);
+  // Unreadable or zero: the stall threshold, so every stall counts.
+  EXPECT_EQ(EffectiveHooksTimeout(HooksTimeoutSetting::kUnreadable, 900),
+            200u);
+  EXPECT_EQ(EffectiveHooksTimeout(HooksTimeoutSetting::kValue, 0), 200u);
+}
+
+TEST(RemoteInputNative, HooksTimeoutStringsParseStrictly) {
+  uint32_t v = 0;
+  EXPECT_TRUE(remote_input::ParseHooksTimeout(L"300", &v));
+  EXPECT_EQ(v, 300u);
+  EXPECT_TRUE(remote_input::ParseHooksTimeout(L" 5000 ", &v));
+  EXPECT_EQ(v, 5000u);
+  EXPECT_TRUE(remote_input::ParseHooksTimeout(L"4294967295", &v));
+  EXPECT_EQ(v, 4294967295u);
+  EXPECT_FALSE(remote_input::ParseHooksTimeout(L"4294967296", &v));
+  EXPECT_FALSE(remote_input::ParseHooksTimeout(L"", &v));
+  EXPECT_FALSE(remote_input::ParseHooksTimeout(L"  ", &v));
+  EXPECT_FALSE(remote_input::ParseHooksTimeout(L"-1", &v));
+  EXPECT_FALSE(remote_input::ParseHooksTimeout(L"0x12c", &v));
+  EXPECT_FALSE(remote_input::ParseHooksTimeout(L"300ms", &v));
+  EXPECT_FALSE(remote_input::ParseHooksTimeout(nullptr, &v));
 }
 
 TEST(RemoteInputNative, ReasonCountsOnlyGrowAndRejectUnknownReasons) {
