@@ -38,7 +38,27 @@ sealed class SharedSurface {
   /// in the same units, for a capturer that leaves out a window's title bar
   /// or shadow. The viewer's normalized points map onto the bounds deflated
   /// by these insets (`docs/design.md` §3.3).
+  ///
+  /// Each inset must be finite and not negative: a negative one would put
+  /// the picture's edge outside the surface. `RemoteInputHost.enable` and
+  /// `ControlSession.changeSurface` throw an [ArgumentError] for a surface
+  /// with one (RIN-51).
   final EdgeInsets contentInsets;
+}
+
+/// Throws an [ArgumentError] unless [surface]'s `contentInsets` are all
+/// finite and not negative (RIN-51). Internal.
+void checkContentInsets(SharedSurface surface) {
+  final i = surface.contentInsets;
+  for (final v in [i.left, i.top, i.right, i.bottom]) {
+    if (!v.isFinite || v < 0) {
+      throw ArgumentError.value(
+        surface,
+        'surface',
+        'has a negative or non-finite contentInsets value',
+      );
+    }
+  }
 }
 
 /// A display surface. See [SharedSurface.display].
@@ -151,4 +171,27 @@ double mapNormalized(int v, double start, double extent) =>
 Offset mapNormalizedPoint(int x, int y, Rect bounds) => Offset(
   mapNormalized(x, bounds.left, bounds.width),
   mapNormalized(y, bounds.top, bounds.height),
+);
+
+/// The largest coordinate the host injects on [start]..[end]: half a wire
+/// step short of [end], where the last wire value lands on a surface
+/// without insets (RIN-51).
+///
+/// [end] itself is outside the surface. Windows floors a coordinate to its
+/// pixel (`desktopPixel`), so [end] is the first pixel past the surface,
+/// and this is inside the last pixel, `end - 1`, whenever the bounds are
+/// whole pixels (they always are there). macOS posts the point as it is:
+/// a hair inside the edge, as the last wire value has always been. For an
+/// extent so small that the step is lost to rounding, [start].
+double lastInside(double start, double end) {
+  final v = end - (end - start) / 131072;
+  return v < end ? v : start;
+}
+
+/// [point] clamped onto [bounds]: from the left and top edges to just
+/// inside the right and bottom ones ([lastInside]), so a point never lands
+/// a pixel outside the surface, whatever the insets (RIN-51).
+Offset clampToSurface(Offset point, Rect bounds) => Offset(
+  point.dx.clamp(bounds.left, lastInside(bounds.left, bounds.right)),
+  point.dy.clamp(bounds.top, lastInside(bounds.top, bounds.bottom)),
 );

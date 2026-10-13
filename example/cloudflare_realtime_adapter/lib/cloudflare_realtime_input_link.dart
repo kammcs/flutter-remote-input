@@ -25,6 +25,10 @@
 /// `linkClosed`. To go on, ask for consent again, [CloudflareInputLink.attach]
 /// again and start a new session or viewer on the same link: its published
 /// channels survive reconnects.
+///
+/// **Bounded buffering:** what arrives before the session or viewer listens
+/// is kept for it, up to [maxMessagesBeforeListen] messages per channel
+/// ([PreListenBuffer]). Keep a limit like it in an adapter of your own.
 library;
 
 import 'dart:async';
@@ -41,6 +45,10 @@ const String movesChannelName = 'remote-input/moves';
 
 /// The presenter's channel to the viewer.
 const String hostChannelName = 'remote-input/host';
+
+/// How many incoming messages a channel keeps for a session or viewer that
+/// hasn't listened yet (RIN-52). Beyond it, newer messages are dropped.
+const int maxMessagesBeforeListen = 256;
 
 /// Which end of the link this app is.
 enum InputLinkRole {
@@ -114,7 +122,7 @@ final class CloudflareInputLink implements InputLink {
             // Sender identity from the channel's session, never the payload.
             final bytes = m.binary;
             if (m.participantId != peer.participantId || bytes == null) return;
-            if (!sink.isClosed) sink.add(bytes);
+            sink.add(bytes);
           }, onDone: () => unawaited(a.end())),
         )
         // When the peer reconnects, the subscription closes this channel
@@ -160,10 +168,10 @@ final class _Attachment {
   final CloudflareInputLink _link;
   final List<RemoteDataSubscription> subscriptions = [];
   final List<StreamSubscription<Object?>> listeners = [];
-  // Single-subscription, so messages that arrive before the session (or
-  // viewer) listens are kept for it.
-  final StreamController<Uint8List> reliableIn = StreamController();
-  final StreamController<Uint8List> movesIn = StreamController();
+  // Messages that arrive before the session (or viewer) listens are kept
+  // for it, up to a limit.
+  final PreListenBuffer reliableIn = PreListenBuffer();
+  final PreListenBuffer movesIn = PreListenBuffer();
   final StreamController<bool> open = StreamController.broadcast();
   bool attached = false;
   bool ended = false;
@@ -199,11 +207,65 @@ final class _Attachment {
   }
 }
 
+/// A channel's incoming messages, as a single-subscription stream that
+/// keeps what arrives before anyone listens, but **at most [capacity]
+/// messages** (RIN-52).
+///
+/// Before the cap, a peer could make the app buffer without limit between
+/// `attach` and the session or viewer listening: a flood, or a session
+/// that's never created. Beyond the cap, the **newest** messages are
+/// dropped ([dropped] counts them): the oldest are kept, in order, so the
+/// handshake and the first input survive, and nothing jumps the queue.
+/// Losing later input is safe: the host's sequence checks treat it as
+/// lost, a release whose press was dropped does nothing, and normal input
+/// never gets near the cap, since the session listens as soon as it's
+/// created. Once a listener is attached, messages pass straight through.
+/// Adapters derived from this one should keep a limit like it.
+final class PreListenBuffer {
+  /// Creates a buffer that keeps at most [capacity] messages before a
+  /// listener.
+  PreListenBuffer({this.capacity = maxMessagesBeforeListen});
+
+  /// The most messages kept before a listener.
+  final int capacity;
+
+  final StreamController<Uint8List> _controller = StreamController();
+  int _kept = 0;
+  int _dropped = 0;
+
+  /// The messages: buffered ones first, then each as it arrives.
+  Stream<Uint8List> get stream => _controller.stream;
+
+  /// Messages dropped because the buffer was full. A count, never content.
+  int get dropped => _dropped;
+
+  /// Whether [close] has been called.
+  bool get isClosed => _controller.isClosed;
+
+  /// Passes [message] on, keeps it until a listener comes, or drops it if
+  /// [capacity] messages are already waiting. Does nothing after [close].
+  void add(Uint8List message) {
+    if (_controller.isClosed) return;
+    if (!_controller.hasListener) {
+      if (_kept >= capacity) {
+        _dropped++;
+        return;
+      }
+      _kept++;
+    }
+    _controller.add(message);
+  }
+
+  /// Ends the stream. Not awaited by the link: a stream nobody listened
+  /// to never finishes closing.
+  Future<void> close() => _controller.close();
+}
+
 final class _Channel implements InputChannel {
   _Channel(this._attachment, this._incoming, this._out);
 
   final _Attachment _attachment;
-  final StreamController<Uint8List> _incoming;
+  final PreListenBuffer _incoming;
   final LocalDataChannel? _out; // Null for the host's moves: it sends none.
 
   @override
@@ -222,7 +284,10 @@ final class _Channel implements InputChannel {
     // Never blocks; a failed send is a lost message, like on the wire.
     // Future.sync also catches a synchronous throw: the channel can close a
     // microtask before isOpen above follows it.
-    unawaited(Future.sync(() => out.send(message)).catchError((Object _) {}));
+    unawaited(
+      Future.sync(() => out.send(message))
+          .then<void>((_) {}, onError: (Object _) {}),
+    );
   }
 
   @override

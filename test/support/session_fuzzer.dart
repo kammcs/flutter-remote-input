@@ -1185,17 +1185,19 @@ final class _Run {
       _ => null,
     };
     if (point != null) {
-      // Every pointer event lands on the shared surface (RIN-50). A release
-      // may instead go where the pointer already is (docs/design.md §6.2).
+      // Every pointer event lands on the shared surface (RIN-50), whose
+      // right and bottom edges are outside it (RIN-51): a point on them
+      // would be a pixel past the surface once floored. A release may
+      // instead go where the pointer already is (docs/design.md §6.2).
       final bounds = _bounds(current);
       final inside =
           bounds != null &&
           point.dx.isFinite &&
           point.dy.isFinite &&
           point.dx >= bounds.left &&
-          point.dx <= bounds.right &&
+          point.dx < bounds.right &&
           point.dy >= bounds.top &&
-          point.dy <= bounds.bottom;
+          point.dy < bounds.bottom;
       if (!inside && !(release && point == lastPoint)) {
         fail('pointOffSurface', '${e.runtimeType} outside the surface');
       }

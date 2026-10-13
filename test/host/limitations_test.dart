@@ -32,6 +32,24 @@ void main() {
     ]);
   });
 
+  test('pointer typing is a gap on both host platforms (RIN-49)', () {
+    for (final p in [PeerPlatform.windows, PeerPlatform.macos]) {
+      expect(
+        HostLimitation.forPlatform(p),
+        contains(HostLimitation.pointerTyping),
+      );
+    }
+    expect(HostLimitation.pointerTyping.isGap, isTrue);
+    expect(
+      HostLimitation.forPlatform(PeerPlatform.android),
+      isNot(contains(HostLimitation.pointerTyping)),
+    );
+    // Only it is a gap: the rest are what can't be controlled.
+    expect(HostLimitation.values.where((l) => l.isGap), [
+      HostLimitation.pointerTyping,
+    ]);
+  });
+
   test('follows the current platform', () {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);

@@ -200,14 +200,25 @@ void main() {
 
   test('points never leave the surface, whatever the insets (L3)', () {
     fakeAsync((async) {
+      // Negative insets are refused (RIN-51; test/host/surface_bounds_test).
+      expect(
+        () => RemoteInputHost(platform: FakeHostPlatform()).enable(
+          link: MemoryInputLink.pair().host,
+          surface: RectSurface(
+            const Rect.fromLTWH(0, 0, 100, 100),
+            contentInsets: const EdgeInsets.only(left: -50),
+          ),
+        ),
+        throwsArgumentError,
+      );
       final surface = RectSurface(
         const Rect.fromLTWH(0, 0, 100, 100),
-        contentInsets: const EdgeInsets.only(left: -50),
+        contentInsets: const EdgeInsets.only(left: 50),
       );
       final rig = Rig(async, surface: surface);
       rig.viewer.button(0, 0, PointerButton.left, down: true);
       rig.flush();
-      expect((rig.events.single as InjectedButton).point.dx, 0);
+      expect((rig.events.single as InjectedButton).point.dx, closeTo(50, 0.01));
 
       surface.update(const Rect.fromLTWH(0, 0, double.nan, 100));
       rig.viewer.wheel(0, 0, dy: 1);
@@ -241,6 +252,75 @@ void main() {
       }
       rig.flush();
       expect(rig.viewer.received.whereType<Pong>(), hasLength(20));
+      expect(rig.dropped(DropReason.rateLimited), 10);
+      expect(rig.session.stats.ignored, 0);
+    });
+  });
+
+  group('control messages are rate limited (RIN-55)', () {
+    test('ignorable extension messages count against their own bucket', () {
+      fakeAsync((async) {
+        final rig = Rig(async);
+        for (var i = 0; i < 500; i++) {
+          rig.viewer.sendBytes(Uint8List.fromList([0xC0 + i % 64, 0, 0, i]));
+        }
+        rig.flush();
+        // A burst of 20; the rest dropped and counted, not violations.
+        expect(rig.session.stats.ignored, 20);
+        expect(rig.dropped(DropReason.rateLimited), 480);
+        expect(rig.session.stats.totalViolations, 0);
+        expect(rig.session.state, const SessionActive());
+
+        // 10 a second after that.
+        rig.elapse(const Duration(seconds: 1));
+        for (var i = 0; i < 30; i++) {
+          rig.viewer.sendBytes(Uint8List.fromList([0xFF, 0, 0]));
+        }
+        rig.flush();
+        expect(rig.session.stats.ignored, 30);
+        expect(rig.dropped(DropReason.rateLimited), 500);
+
+        // Pings have their own bucket: a flood of extensions doesn't starve
+        // them, and input still works.
+        rig.viewer.send(const Ping(id: 1, viewerMicros: 0));
+        rig.viewer.key(usageA, KeyAction.down);
+        rig.flush();
+        expect(rig.viewer.received.whereType<Pong>(), hasLength(1));
+        expect(rig.events.last, const InjectedKey(usageA, down: true));
+      });
+    });
+
+    test('a wrong-version Hello is answered at most once a second', () {
+      fakeAsync((async) {
+        final rig = Rig(async, handshake: false);
+        for (var i = 0; i < 100; i++) {
+          rig.viewer.hello(version: 2 + i % 200);
+        }
+        rig.flush();
+        List<Bye> byes() => rig.viewer.received.whereType<Bye>().toList();
+        expect(byes(), hasLength(1));
+        expect(byes().single.reason, ByeReason.unsupportedVersion);
+        expect(rig.dropped(DropReason.rateLimited), 99);
+        expect(rig.session.stats.totalViolations, 0);
+        expect(rig.session.state, const SessionWaiting());
+
+        rig.elapse(const Duration(milliseconds: 999));
+        rig.viewer.hello(version: 0);
+        rig.flush();
+        expect(byes(), hasLength(1));
+
+        rig.elapse(const Duration(milliseconds: 1));
+        rig.viewer
+          ..hello(version: 0)
+          ..hello(version: 0);
+        rig.flush();
+        expect(byes(), hasLength(2));
+
+        // A right Hello still completes the handshake at once.
+        rig.viewer.hello();
+        rig.flush();
+        expect(rig.session.state, const SessionActive());
+      });
     });
   });
 

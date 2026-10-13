@@ -31,6 +31,11 @@ const Duration _helloInterval = Duration(seconds: 1);
 /// How often a blocked session checks whether the condition cleared.
 const Duration _blockPollInterval = Duration(milliseconds: 250);
 
+/// Ignorable extension messages (types 0xC0–0xFF) taken per second, and in
+/// a burst; the rest are dropped as `DropReason.rateLimited` (RIN-55).
+const int _extensionRate = 10;
+const int _extensionBurst = 20;
+
 /// Creates a session. Internal: `RemoteInputHost.enable` is the public way.
 ControlSession createControlSession({
   required HostPlatform platform,
@@ -135,6 +140,12 @@ final class ControlSession {
   final Set<PointerButton> _unreleasedButtons = <PointerButton>{};
 
   final TokenBucket _pingBucket = TokenBucket(rate: 10, burst: 20);
+  final TokenBucket _extensionBucket = TokenBucket(
+    rate: _extensionRate.toDouble(),
+    burst: _extensionBurst,
+  );
+  // At most one Bye for a wrong-version Hello a second (RIN-55).
+  final TokenBucket _versionByeBucket = TokenBucket(rate: 1, burst: 1);
 
   final ListQueue<InputMessage> _queue = ListQueue();
   late final TokenBucket _eventBucket;
@@ -227,9 +238,10 @@ final class ControlSession {
   /// Held buttons are released.
   ///
   /// Throws a [StateError] after the session stopped, and an [ArgumentError]
-  /// if [surface] can't be found.
+  /// if [surface] can't be found or has a negative `contentInsets` value.
   void changeSurface(SharedSurface surface) {
     if (_stopped) throw StateError('The session has stopped');
+    checkContentInsets(surface);
     final geometry = _geometryOf(surface);
     if (geometry == null) {
       throw ArgumentError.value(surface, 'surface', 'is not available');
@@ -252,6 +264,7 @@ final class ControlSession {
   // --- Lifecycle ------------------------------------------------------------
 
   void _start() {
+    checkContentInsets(_surface);
     final geometry = _geometryOf(_surface);
     if (geometry == null) {
       throw ArgumentError.value(_surface, 'surface', 'is not available');
@@ -508,7 +521,13 @@ final class ControlSession {
     }
     switch (decodeMessage(bytes)) {
       case DecodeIgnored():
-        _ignored++;
+        // Nothing reads them, but a flood of them is still a flood: counted
+        // against their own bucket, like pings (RIN-55).
+        if (_extensionBucket.tryTake()) {
+          _ignored++;
+        } else {
+          _drop(DropReason.rateLimited);
+        }
       case DecodeFailed():
         _violation(ViolationKind.malformed);
       case Decoded(:final sessionTag, :final message):
@@ -537,7 +556,7 @@ final class ControlSession {
         if (_pingBucket.tryTake()) {
           _send(Pong(id: m.id, viewerMicros: m.viewerMicros));
         } else {
-          _ignored++;
+          _drop(DropReason.rateLimited);
         }
       case InputMessage m:
         _onReliableInput(m);
@@ -551,7 +570,13 @@ final class ControlSession {
       return;
     }
     if (m.version != remoteInputProtocolVersion) {
-      _send(const Bye(ByeReason.unsupportedVersion));
+      // Answered at most once a second, so a stream of them can't make the
+      // host send a Bye for each (RIN-55).
+      if (_versionByeBucket.tryTake()) {
+        _send(const Bye(ByeReason.unsupportedVersion));
+      } else {
+        _drop(DropReason.rateLimited);
+      }
       return;
     }
     _viewerPlatform = m.viewerPlatform;
@@ -1043,12 +1068,9 @@ final class ControlSession {
       _drop(DropReason.failed);
       return null;
     }
-    final p = mapNormalizedPoint(m.x, m.y, bounds);
-    // Never outside the surface, whatever the insets.
-    return Offset(
-      p.dx.clamp(outer.left, outer.right),
-      p.dy.clamp(outer.top, outer.bottom),
-    );
+    // Never outside the surface: the right and bottom edges are outside
+    // it, so the clamp stops just short of them (RIN-51).
+    return clampToSurface(mapNormalizedPoint(m.x, m.y, bounds), outer);
   }
 
   static bool _isUsable(Rect r) =>
