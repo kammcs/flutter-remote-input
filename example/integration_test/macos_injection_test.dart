@@ -23,6 +23,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:remote_input/remote_input.dart';
 import 'package:remote_input/testing.dart';
+// ignore: implementation_imports
+import 'package:remote_input/src/host/macos/macos_ffi.dart' show FfiMacosNative;
+// ignore: implementation_imports
+import 'package:remote_input/src/host/macos/macos_native.dart'
+    show MacosActivityCounts, MacosActivitySnapshot;
 
 const _window = MethodChannel('remote_input_example/window');
 
@@ -101,6 +106,10 @@ void main() {
     HardwareKeyboard.instance.addHandler(probe.keyHandler);
     ControlSession? session;
     RemoteInputViewer? viewer;
+    // RIN-57: which HID-state counters the package's own posts advance.
+    final native = FfiMacosNative.open();
+    MacosActivitySnapshot? before;
+    final states = <SessionState>[];
     try {
       await tester.pumpWidget(_app(probe));
       await _settle(tester, 300);
@@ -122,7 +131,6 @@ void main() {
       final pair = MemoryInputLink.pair();
       final host = RemoteInputHost();
       expect(host.checkAvailable(), isNull);
-      final states = <SessionState>[];
       session = host.enable(
         link: pair.host,
         surface: SharedSurface.window(windowId, contentInsets: insets),
@@ -136,6 +144,7 @@ void main() {
           .firstWhere((s) => s is SessionActive)
           .timeout(const Duration(seconds: 5));
 
+      before = native?.activitySnapshot();
       // A first click activates the app, so its window takes keys.
       viewer.click(const Offset(0.75, 0.2));
       await _settle(tester, 500);
@@ -286,6 +295,23 @@ void main() {
       await _settle(tester, 100);
       expect(HardwareKeyboard.instance.physicalKeysPressed, isEmpty);
     } finally {
+      final start = before;
+      final end = native?.activitySnapshot();
+      if (start != null && end != null) {
+        String d(MacosActivityCounts a, MacosActivityCounts b) =>
+            'keyDowns ${b.keyDowns - a.keyDowns}, '
+            'flagsChanged ${b.flagsChanged - a.flagsChanged}, '
+            'buttonDowns ${b.buttonDowns - a.buttonDowns}, '
+            'scrolls ${b.scrolls - a.scrolls}, moves ${b.moves - a.moves}';
+        // Counts only (design §6.6).
+        debugPrint('RIN-57 HID-state deltas: ${d(start.hid, end.hid)}');
+        debugPrint('RIN-57 own-post deltas:  ${d(start.own, end.own)}');
+        debugPrint(
+          'RIN-57 pauses: ${states.whereType<SessionPaused>().length}, '
+          'states: ${states.length}',
+        );
+        debugPrint('RIN-57 local input: ${session?.stats.localInput}');
+      }
       session?.stop();
       await viewer?.close();
       HardwareKeyboard.instance.removeHandler(probe.keyHandler);

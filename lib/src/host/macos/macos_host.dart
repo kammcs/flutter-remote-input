@@ -600,7 +600,9 @@ final class MacosLocalActivity
   bool checkNow() {
     if (!isMonitoring) return false;
     if (_readDevices()) return true;
-    return _detector.checkDiscrete(_native.activitySnapshot());
+    final watch = _watch;
+    if (watch == null) return false;
+    return _detector.checkDiscrete(_native.activitySnapshot(), watch.elapsed);
   }
 
   /// Reads the device watch's count, and emits on [devicesLost] if it grew.

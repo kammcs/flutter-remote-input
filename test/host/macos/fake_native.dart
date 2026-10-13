@@ -93,6 +93,38 @@ final class FakeMacosNative implements MacosNative {
   MacosActivityCounts own = const MacosActivityCounts();
   int snapshots = 0;
 
+  /// Counts each post in [own], as the native side does. Off by default,
+  /// so tests that bump [hid] by hand aren't matched against posts.
+  bool countOwnPosts = false;
+
+  /// Posts also advance [hid], as they do on macOS 27 (RIN-57).
+  bool ownPostsReachHid = false;
+
+  void _ownPost({
+    int keyDowns = 0,
+    int buttonDowns = 0,
+    int scrolls = 0,
+    int moves = 0,
+  }) {
+    if (countOwnPosts) {
+      own = MacosActivityCounts(
+        keyDowns: own.keyDowns + keyDowns,
+        flagsChanged: own.flagsChanged,
+        buttonDowns: own.buttonDowns + buttonDowns,
+        scrolls: own.scrolls + scrolls,
+        moves: own.moves + moves,
+      );
+    }
+    if (ownPostsReachHid) {
+      bumpHid(
+        keyDowns: keyDowns,
+        buttonDowns: buttonDowns,
+        scrolls: scrolls,
+        moves: moves,
+      );
+    }
+  }
+
   List<MouseCall> get mouse => calls.whereType<MouseCall>().toList();
   List<KeyCall> get keys => calls.whereType<KeyCall>().toList();
 
@@ -113,6 +145,14 @@ final class FakeMacosNative implements MacosNative {
     if (postStatus == MacosStatus.ok) {
       calls.add(MouseCall(type, point, button, clickState, flags));
       cursor = point;
+      // CGEventType: left, right and other mouse down are 1, 3 and 25.
+      const downs = {1, 3, 25};
+      _ownPost(
+        buttonDowns: downs.contains(type) ? 1 : 0,
+        moves: downs.contains(type) || type == 2 || type == 4 || type == 26
+            ? 0
+            : 1,
+      );
     }
     return postStatus;
   }
@@ -127,6 +167,7 @@ final class FakeMacosNative implements MacosNative {
   }) {
     if (postStatus == MacosStatus.ok) {
       calls.add(ScrollCall(point, unit, wheel1, wheel2, flags));
+      _ownPost(scrolls: 1);
     }
     return postStatus;
   }
@@ -140,13 +181,17 @@ final class FakeMacosNative implements MacosNative {
   }) {
     if (postStatus == MacosStatus.ok) {
       calls.add(KeyCall(keyCode, down, autorepeat, flags));
+      if (down) _ownPost(keyDowns: 1);
     }
     return postStatus;
   }
 
   @override
   int postText(List<int> units) {
-    if (postStatus == MacosStatus.ok) calls.add(TextCall(List.of(units)));
+    if (postStatus == MacosStatus.ok) {
+      calls.add(TextCall(List.of(units)));
+      _ownPost(keyDowns: 1);
+    }
     return postStatus;
   }
 

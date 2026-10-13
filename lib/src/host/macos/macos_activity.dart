@@ -22,11 +22,16 @@
 // combined state of all hardware event sources posting from the HID
 // system", while the package posts from its own private-state source, whose
 // "independent state table" tracks only its own events. So the package's
-// events are expected not to appear in the HID counts, and no Input
-// Monitoring permission is needed. That's verified on a device by
-// example/integration_test/macos_injection_test.dart; if it turns out
-// wrong, [MacosActivityDetector.ownEventsReachHidState] subtracts the
-// package's own events instead, for both movement rules.
+// events were expected not to appear in the HID counts. **On macOS 27 they
+// do** (RIN-57, measured with example/integration_test/macos_injection_test
+// .dart: one posted click advanced the HID button count by one), so every
+// injected event counted as local input and paused the session. The
+// detector therefore subtracts the package's own posts from the HID counts,
+// kind by kind, and learns per kind whether that's needed: a post whose
+// count never shows up in the HID counts within [ownEventWindow] means
+// that kind doesn't reach them on this system, and from then on its HID
+// counts are taken as they are. No Input Monitoring permission is needed
+// either way.
 
 import 'dart:collection';
 import 'dart:ui' show Offset;
@@ -42,17 +47,20 @@ final class MacosActivityDetector {
   /// (`docs/design.md` §6.3: 4). [anchorReset] is how long without local
   /// movement before small movements stop adding up. [minMoveEvents]
   /// hardware moves within [moveWindow] count as local movement wherever
-  /// the pointer is. With [ownEventsReachHidState], the package's own
-  /// posted events are subtracted from the HID counts, each for up to
-  /// [ownEventWindow].
+  /// the pointer is. The package's own posted events are subtracted from
+  /// the HID counts, each for up to [ownEventWindow]; [ownEventsReachHidState]
+  /// forces whether they reach those counts (null, the default, learns it
+  /// per kind).
   MacosActivityDetector({
     this.moveThreshold = 4,
     this.anchorReset = const Duration(milliseconds: 250),
     this.minMoveEvents = 3,
     this.moveWindow = const Duration(milliseconds: 100),
-    this.ownEventsReachHidState = false,
-    this.ownEventWindow = const Duration(milliseconds: 250),
-  });
+    this.ownEventsReachHidState,
+    this.ownEventWindow = const Duration(milliseconds: 500),
+  }) {
+    reset();
+  }
 
   /// How far the pointer must move, in points, to count as local input.
   final double moveThreshold;
@@ -75,13 +83,25 @@ final class MacosActivityDetector {
   /// The window [minMoveEvents] are counted in.
   final Duration moveWindow;
 
-  /// Whether events the package posts appear in the HID system's counts.
-  /// Expected false (see the file comment); true subtracts them.
-  final bool ownEventsReachHidState;
+  /// Whether events the package posts appear in the HID system's counts:
+  /// true subtracts them, false takes the HID counts as they are, and null
+  /// (the default) starts by subtracting and learns per kind (see the file
+  /// comment; RIN-57).
+  final bool? ownEventsReachHidState;
 
   /// How long one of the package's own events may take to appear in the
-  /// HID counts, when [ownEventsReachHidState] is true.
+  /// HID counts. A post that hasn't appeared by then, not even in part,
+  /// means its kind doesn't reach them (when learning).
   final Duration ownEventWindow;
+
+  /// Per kind (key downs, modifier changes, button downs, scrolls, moves):
+  /// whether the package's own posts are subtracted from the HID counts.
+  final List<bool> _subtract = List.filled(5, true);
+
+  /// Per kind: whether any own post has been seen in the HID counts, which
+  /// proves the kind reaches them; a later post that goes missing (the
+  /// system dropping or merging one) then changes nothing.
+  final List<bool> _seenInHid = List.filled(5, false);
 
   MacosActivitySnapshot? _last;
   Offset? _anchor;
@@ -89,7 +109,7 @@ final class MacosActivityDetector {
   Duration? _lastLocalMove;
   Duration? _lastNow;
   final ListQueue<(Duration, int)> _recentMoves = ListQueue();
-  final List<ListQueue<(Duration, int)>> _pending = List.generate(
+  final List<ListQueue<_OwnPost>> _pending = List.generate(
     5,
     (_) => ListQueue(),
   );
@@ -109,15 +129,20 @@ final class MacosActivityDetector {
     for (final q in _pending) {
       q.clear();
     }
+    _subtract.fillRange(0, 5, ownEventsReachHidState ?? true);
+    _seenInHid.fillRange(0, 5, false);
   }
+
+  /// Whether the package's own posts of each kind are being subtracted
+  /// from the HID counts: learned, or as forced by [ownEventsReachHidState].
+  /// For diagnostics and tests.
+  List<bool> get subtractingOwnPosts => List.unmodifiable(_subtract);
 
   /// Takes the snapshot polled at [now] and returns whether there was local
   /// input since the previous one. The first snapshot only sets the
   /// baseline.
   bool update(MacosActivitySnapshot snapshot, Duration now) {
-    final previous = _lastNow;
-    if (previous != null && now < previous) _rebase(previous - now);
-    _lastNow = now;
+    _tick(now);
     final last = _last;
     _last = snapshot;
     if (last == null) {
@@ -129,9 +154,7 @@ final class MacosActivityDetector {
     final own = _deltas(snapshot.own, last.own);
     final local = List<int>.filled(5, 0);
     for (var i = 0; i < 5; i++) {
-      local[i] = ownEventsReachHidState
-          ? _subtractOwn(i, hid[i], own[i], now)
-          : hid[i];
+      local[i] = _subtractOwn(i, hid[i], own[i], now);
     }
 
     final injected = _injectedPoint;
@@ -170,6 +193,13 @@ final class MacosActivityDetector {
     return false;
   }
 
+  /// Notes the time [now], rebasing what's kept if the clock went back.
+  void _tick(Duration now) {
+    final previous = _lastNow;
+    if (previous != null && now < previous) _rebase(previous - now);
+    _lastNow = now;
+  }
+
   /// Moves every time kept [back], for a time source that went back: the
   /// monitor's stopwatch follows the wall clock, which a time sync after
   /// wake can set back. Without this, entries from "the future" would never
@@ -177,27 +207,35 @@ final class MacosActivityDetector {
   void _rebase(Duration back) {
     final lastMove = _lastLocalMove;
     if (lastMove != null) _lastLocalMove = lastMove - back;
-    for (final q in [_recentMoves, ..._pending]) {
-      final kept = q.toList();
-      q
-        ..clear()
-        ..addAll([for (final (at, n) in kept) (at - back, n)]);
+    final kept = _recentMoves.toList();
+    _recentMoves
+      ..clear()
+      ..addAll([for (final (at, n) in kept) (at - back, n)]);
+    for (final q in _pending) {
+      for (final post in q) {
+        post.at -= back;
+      }
     }
   }
 
-  /// Whether [snapshot], read between polls, shows a hardware key down, a
-  /// modifier change, a button down or a scroll since the last snapshot
-  /// (RIN-42). Those are local input on their own, so they're checked
-  /// before every injected event. If there is one, it's consumed: those
-  /// counts in the baseline move on, and the movement state is kept, so
-  /// movement is still judged by [update] at the poll's cadence. False
-  /// before the first snapshot, and with [ownEventsReachHidState], whose
-  /// subtraction needs the poll's timing.
-  bool checkDiscrete(MacosActivitySnapshot snapshot) {
+  /// Whether [snapshot], read at [now] between polls, shows a hardware key
+  /// down, a modifier change, a button down or a scroll since the last
+  /// snapshot (RIN-42), after the package's own posts are subtracted
+  /// (RIN-57). Those are local input on their own, so they're checked
+  /// before every injected event. The counts read are consumed (those
+  /// kinds' baselines move on, for the HID and the package's own counts),
+  /// and the movement state is kept, so movement is still judged by
+  /// [update] at the poll's cadence. False before the first snapshot.
+  bool checkDiscrete(MacosActivitySnapshot snapshot, Duration now) {
     final last = _last;
-    if (last == null || ownEventsReachHidState) return false;
+    if (last == null) return false;
+    _tick(now);
     final hid = _deltas(snapshot.hid, last.hid);
-    if (hid[0] + hid[1] + hid[2] + hid[3] == 0) return false;
+    final own = _deltas(snapshot.own, last.own);
+    var local = 0;
+    for (var i = 0; i < 4; i++) {
+      local += _subtractOwn(i, hid[i], own[i], now);
+    }
     MacosActivityCounts keepMoves(MacosActivityCounts now, int moves) =>
         MacosActivityCounts(
           keyDowns: now.keyDowns,
@@ -211,7 +249,7 @@ final class MacosActivityDetector {
       own: keepMoves(snapshot.own, last.own.moves),
       pointer: last.pointer,
     );
-    return true;
+    return local > 0;
   }
 
   /// Records [moves] hardware moves seen at [now], and returns whether the
@@ -230,20 +268,46 @@ final class MacosActivityDetector {
     return total >= minMoveEvents;
   }
 
+  /// [hid] new HID counts of [kind] at [now], with [own] new posts of the
+  /// package's own: how many are local input.
+  ///
+  /// Own posts wait up to [ownEventWindow] to be matched by HID counts.
+  /// Expired posts are dropped before matching, so an old post can't hide
+  /// new local input. When learning, a post that expires with nothing
+  /// matched, for a kind whose posts have never been seen in the HID
+  /// counts, means the kind doesn't reach them, and subtraction stops for
+  /// it. Once any post of a kind has been seen there, the kind reaches
+  /// them, and a missing or partly matched post (the system merging moves,
+  /// dropping one) changes nothing.
+  /// A local event that arrives before the HID count of a post made just
+  /// before it is matched against that post and seen one poll later, when
+  /// the post's own count arrives unmatched.
   int _subtractOwn(int kind, int hid, int own, Duration now) {
+    if (!_subtract[kind]) return hid;
     final queue = _pending[kind];
-    if (own > 0) queue.add((now, own));
-    while (queue.isNotEmpty && now - queue.first.$1 > ownEventWindow) {
-      queue.removeFirst();
+    while (queue.isNotEmpty && now - queue.first.at > ownEventWindow) {
+      final expired = queue.removeFirst();
+      if (!expired.matched &&
+          !_seenInHid[kind] &&
+          ownEventsReachHidState == null) {
+        // Never seen in the HID counts: this kind doesn't reach them.
+        _subtract[kind] = false;
+        queue.clear();
+        return hid;
+      }
     }
+    if (own > 0) queue.add(_OwnPost(now, own));
     var remaining = hid;
     while (remaining > 0 && queue.isNotEmpty) {
-      final (at, count) = queue.removeFirst();
-      if (count > remaining) {
-        queue.addFirst((at, count - remaining));
+      final post = queue.first;
+      post.matched = true;
+      _seenInHid[kind] = true;
+      if (post.left > remaining) {
+        post.left -= remaining;
         remaining = 0;
       } else {
-        remaining -= count;
+        remaining -= post.left;
+        queue.removeFirst();
       }
     }
     return remaining;
@@ -417,4 +481,18 @@ final class MacosCounterHealth {
   }
 
   static int _wrap(int delta) => delta & 0xFFFFFFFF;
+}
+
+/// Posts of one kind by the package, waiting to be matched by HID counts.
+final class _OwnPost {
+  _OwnPost(this.at, this.left);
+
+  /// When they were seen in the package's own counts.
+  Duration at;
+
+  /// How many haven't been matched yet.
+  int left;
+
+  /// Whether any of them has been matched.
+  bool matched = false;
 }

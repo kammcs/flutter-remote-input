@@ -24,6 +24,16 @@ MacosActivitySnapshot snap({
 
 Duration ms(int v) => Duration(milliseconds: v);
 
+extension on MacosActivityCounts {
+  MacosActivityCounts plus(MacosActivityCounts o) => MacosActivityCounts(
+    keyDowns: keyDowns + o.keyDowns,
+    flagsChanged: flagsChanged + o.flagsChanged,
+    buttonDowns: buttonDowns + o.buttonDowns,
+    scrolls: scrolls + o.scrolls,
+    moves: moves + o.moves,
+  );
+}
+
 void main() {
   late MacosActivityDetector d;
   setUp(() => d = MacosActivityDetector());
@@ -47,17 +57,23 @@ void main() {
 
   group('checkDiscrete (RIN-42)', () {
     test('a key, modifier, button or scroll between polls counts once', () {
-      expect(d.checkDiscrete(snap(keys: 1)), isFalse); // no baseline yet
+      expect(d.checkDiscrete(snap(keys: 1), ms(5)), isFalse); // no baseline yet
       d.update(snap(), ms(0));
-      expect(d.checkDiscrete(snap()), isFalse);
-      expect(d.checkDiscrete(snap(keys: 1)), isTrue);
-      expect(d.checkDiscrete(snap(keys: 1)), isFalse);
+      expect(d.checkDiscrete(snap(), ms(5)), isFalse);
+      expect(d.checkDiscrete(snap(keys: 1), ms(5)), isTrue);
+      expect(d.checkDiscrete(snap(keys: 1), ms(5)), isFalse);
       // Consumed: the next poll doesn't report it again.
       expect(d.update(snap(keys: 1), ms(10)), isFalse);
-      expect(d.checkDiscrete(snap(keys: 1, flags: 1)), isTrue);
-      expect(d.checkDiscrete(snap(keys: 1, flags: 1, buttons: 1)), isTrue);
+      expect(d.checkDiscrete(snap(keys: 1, flags: 1), ms(15)), isTrue);
       expect(
-        d.checkDiscrete(snap(keys: 1, flags: 1, buttons: 1, scrolls: 1)),
+        d.checkDiscrete(snap(keys: 1, flags: 1, buttons: 1), ms(15)),
+        isTrue,
+      );
+      expect(
+        d.checkDiscrete(
+          snap(keys: 1, flags: 1, buttons: 1, scrolls: 1),
+          ms(15),
+        ),
         isTrue,
       );
     });
@@ -65,13 +81,17 @@ void main() {
     test('movement is left to the poll', () {
       d.update(snap(pointer: const Offset(100, 100)), ms(0));
       expect(
-        d.checkDiscrete(snap(moves: 5, pointer: const Offset(200, 200))),
+        d.checkDiscrete(
+          snap(moves: 5, pointer: const Offset(200, 200)),
+          ms(15),
+        ),
         isFalse,
       );
       // A key found between polls keeps the movement for the poll to judge.
       expect(
         d.checkDiscrete(
           snap(keys: 1, moves: 5, pointer: const Offset(200, 200)),
+          ms(5),
         ),
         isTrue,
       );
@@ -83,12 +103,109 @@ void main() {
         isTrue,
       );
     });
+  });
 
-    test('off when the package\'s own events reach the HID counts', () {
+  group("the package's own posts in the HID counts (RIN-57)", () {
+    const ownKey = MacosActivityCounts(keyDowns: 1);
+    const ownButton = MacosActivityCounts(buttonDowns: 1);
+
+    test('subtracted by default: an own click or key is not local', () {
+      d.update(snap(), ms(0));
+      // macOS 27: one posted click advanced the HID button count by one.
+      expect(d.update(snap(buttons: 1, own: ownButton), ms(10)), isFalse);
+      expect(
+        d.checkDiscrete(
+          snap(buttons: 1, keys: 1, own: ownKey.plus(ownButton)),
+          ms(12),
+        ),
+        isFalse,
+      );
+      expect(d.subtractingOwnPosts, everyElement(isTrue));
+    });
+
+    test('local input next to own posts still counts', () {
+      d.update(snap(), ms(0));
+      // One own key and one from the keyboard in the same interval.
+      expect(d.checkDiscrete(snap(keys: 2, own: ownKey), ms(5)), isTrue);
+      expect(d.update(snap(keys: 2, own: ownKey), ms(10)), isFalse);
+      expect(
+        d.update(
+          snap(keys: 2, buttons: 2, own: ownKey.plus(ownButton)),
+          ms(20),
+        ),
+        isTrue,
+      );
+    });
+
+    test("an own post's HID count arriving a poll later isn't local", () {
+      d.update(snap(), ms(0));
+      expect(d.update(snap(own: ownKey), ms(10)), isFalse);
+      expect(d.update(snap(keys: 1, own: ownKey), ms(20)), isFalse);
+      expect(d.checkDiscrete(snap(keys: 1, own: ownKey), ms(25)), isFalse);
+    });
+
+    test('learns when a kind never reaches the HID counts', () {
+      d.update(snap(), ms(0));
+      expect(d.update(snap(own: ownKey), ms(10)), isFalse);
+      // Past the window with nothing matched: keys don't reach the counts
+      // here, so a key from the keyboard now counts.
+      expect(d.update(snap(keys: 1, own: ownKey), ms(600)), isTrue);
+      expect(d.subtractingOwnPosts[0], isFalse);
+      expect(d.subtractingOwnPosts[2], isTrue);
+      // And from then on every key does, own posts or not.
+      expect(
+        d.checkDiscrete(snap(keys: 2, own: ownKey.plus(ownKey)), ms(610)),
+        isTrue,
+      );
+    });
+
+    test(
+      'a missing post, once the kind is known to reach, changes nothing',
+      () {
+        d.update(snap(), ms(0));
+        // A key post is seen in the HID counts: keys reach them.
+        expect(d.update(snap(keys: 1, own: ownKey), ms(10)), isFalse);
+        // A second post goes missing (the system dropped or merged it).
+        const twoKeys = MacosActivityCounts(keyDowns: 2);
+        expect(d.update(snap(keys: 1, own: twoKeys), ms(20)), isFalse);
+        d.update(snap(keys: 1, own: twoKeys), ms(700));
+        expect(d.subtractingOwnPosts[0], isTrue);
+        // The package's next key is still subtracted.
+        const threeKeys = MacosActivityCounts(keyDowns: 3);
+        expect(d.update(snap(keys: 2, own: threeKeys), ms(710)), isFalse);
+      },
+    );
+
+    test('coalesced moves, matched in part, keep the subtraction', () {
+      d.update(snap(pointer: const Offset(100, 100)), ms(0));
+      const ownMoves = MacosActivityCounts(moves: 5);
+      expect(
+        d.update(
+          snap(moves: 3, own: ownMoves, pointer: const Offset(100, 100)),
+          ms(10),
+        ),
+        isFalse,
+      );
+      d.update(
+        snap(moves: 3, own: ownMoves, pointer: const Offset(100, 100)),
+        ms(700),
+      );
+      expect(d.subtractingOwnPosts[4], isTrue);
+    });
+
+    test('an old own post cannot hide new local input', () {
       d = MacosActivityDetector(ownEventsReachHidState: true);
       d.update(snap(), ms(0));
-      expect(d.checkDiscrete(snap(keys: 1)), isFalse);
-      expect(d.update(snap(keys: 1), ms(10)), isTrue);
+      expect(d.update(snap(own: ownKey), ms(10)), isFalse);
+      // The post never showed up; 600 ms later a real key isn't eaten by it.
+      expect(d.update(snap(keys: 1, own: ownKey), ms(600)), isTrue);
+    });
+
+    test('forced off takes the HID counts as they are', () {
+      d = MacosActivityDetector(ownEventsReachHidState: false);
+      d.update(snap(), ms(0));
+      expect(d.update(snap(keys: 1, own: ownKey), ms(10)), isTrue);
+      expect(d.subtractingOwnPosts, everyElement(isFalse));
     });
   });
 
@@ -357,7 +474,7 @@ void main() {
       expect(
         d.update(
           snap(keys: 1, own: const MacosActivityCounts(keyDowns: 1)),
-          ms(400),
+          ms(700), // past ownEventWindow (500 ms)
         ),
         isTrue,
       );

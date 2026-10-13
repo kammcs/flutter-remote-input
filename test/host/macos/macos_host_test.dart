@@ -895,6 +895,44 @@ void main() {
       });
     });
 
+    test(
+      "the package's own posts in the HID counts don't pause it (RIN-57)",
+      () {
+        fakeAsync((async) {
+          // macOS 27: posts from the private source advance the HID counts.
+          native
+            ..countOwnPosts = true
+            ..ownPostsReachHid = true;
+          final pair = MemoryInputLink.pair();
+          final session = RemoteInputHost(platform: MacosHostPlatform(native))
+              .enable(link: pair.host, surface: const SharedSurface.display(1));
+          final states = <SessionState>[];
+          session.stateChanges.listen(states.add);
+          final viewer = RemoteInputViewer(link: pair.viewer);
+          async.elapse(const Duration(milliseconds: 20));
+          expect(session.state, const SessionActive());
+          for (var i = 0; i < 20; i++) {
+            viewer
+              ..pointerMove(Offset(0.1 + i * 0.03, 0.5))
+              ..click(Offset(0.1 + i * 0.03, 0.5))
+              ..key(usageA, KeyAction.down)
+              ..key(usageA, KeyAction.up)
+              ..text('hi')
+              ..wheel(const Offset(0.5, 0.5), dy: 3);
+            async.elapse(const Duration(milliseconds: 50));
+          }
+          expect(states.whereType<SessionPaused>(), isEmpty);
+          expect(native.keys.where((k) => k.down), hasLength(20));
+          // The presenter's own keyboard still wins.
+          native.bumpHid(keyDowns: 1);
+          async.elapse(const Duration(milliseconds: 10));
+          expect(session.state, const SessionPaused(PauseReason.localInput));
+          session.stop();
+          async.flushMicrotasks();
+        });
+      },
+    );
+
     test('frozen HID counters block the session (RIN-45)', () {
       fakeAsync((async) {
         final pair = MemoryInputLink.pair();
