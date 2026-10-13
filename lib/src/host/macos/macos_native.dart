@@ -41,6 +41,7 @@ final class MacosWindowRecord {
     required this.layer,
     required this.alpha,
     required this.bounds,
+    this.clickThrough = false,
   });
 
   /// The process that owns it (`kCGWindowOwnerPID`).
@@ -54,6 +55,13 @@ final class MacosWindowRecord {
 
   /// Its bounds in global display points (`kCGWindowBounds`).
   final Rect bounds;
+
+  /// Whether it's this process's own window and AppKit says it ignores
+  /// mouse events (`NSWindow.ignoresMouseEvents`), so clicks pass through
+  /// it (RIN-47). Always false for other processes' windows, which the
+  /// window list can't tell about, and false when AppKit couldn't be asked
+  /// (off the main thread).
+  final bool clickThrough;
 }
 
 /// A window's bounds and the windows above it, from the window list.

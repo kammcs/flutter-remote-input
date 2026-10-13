@@ -464,11 +464,13 @@ void main() {
       int layer = 0,
       double alpha = 1,
       Rect bounds = const Rect.fromLTWH(200, 200, 100, 100),
+      bool clickThrough = false,
     }) => MacosWindowRecord(
       ownerPid: pid,
       layer: layer,
       alpha: alpha,
       bounds: bounds,
+      clickThrough: clickThrough,
     );
     const inside = Offset(250, 250);
     const full = Rect.fromLTWH(0, 0, 1728, 1117);
@@ -506,7 +508,8 @@ void main() {
       );
     });
 
-    test('floating panels count; levels 20 and up and clear windows not', () {
+    test('floating panels count; others\' levels 20 and up and clear '
+        'windows not', () {
       expect(macosIsOwnWindowAt(inside, [rec(pid: 7, layer: 3)], 7), isTrue);
       // The Dock's and Notification Center's full-screen windows, the
       // menu bar and the cursor don't hide the host's window below.
@@ -523,11 +526,11 @@ void main() {
         ], 7),
         isTrue,
       );
-      // A host border at .statusBar (25) over a whole display doesn't
-      // block the pointer.
+      // A click-through host border at .statusBar (25) over a whole
+      // display doesn't block the pointer.
       expect(
         macosIsOwnWindowAt(inside, [
-          rec(pid: 7, layer: 25, bounds: full),
+          rec(pid: 7, layer: 25, bounds: full, clickThrough: true),
           rec(pid: 42, bounds: full),
         ], 7),
         isFalse,
@@ -540,6 +543,135 @@ void main() {
         macosIsOwnWindowAt(inside, [rec(pid: 7, layer: -2147483603)], 7),
         isFalse,
       );
+    });
+
+    group('the host\'s own windows at levels 20 and up (RIN-47)', () {
+      // An open menu: on macOS 27, a pop-up menu (the menu bar's, a status
+      // item's, a context menu) is this process's window at level 101.
+      final menu = rec(
+        pid: 7,
+        layer: macPopUpMenuWindowLevel,
+        bounds: const Rect.fromLTWH(200, 30, 250, 180),
+      );
+      const onMenu = Offset(300, 100);
+
+      test('an open menu of the host is its own', () {
+        expect(macosIsOwnWindowAt(onMenu, [menu], 7), isTrue);
+        // Over the shared app's window, under the Dock's full-screen one
+        // (20 sorts below 101, but order doesn't matter at these levels).
+        expect(
+          macosIsOwnWindowAt(onMenu, [
+            rec(pid: 3, layer: 2147483630, bounds: full),
+            menu,
+            rec(pid: 1, layer: 20, bounds: full),
+            rec(pid: 42, bounds: full),
+          ], 7),
+          isTrue,
+        );
+        // Beside the menu, the shared app's window decides.
+        expect(
+          macosIsOwnWindowAt(const Offset(600, 600), [
+            menu,
+            rec(pid: 42, bounds: full),
+          ], 7),
+          isFalse,
+        );
+      });
+
+      test('any level of 20 and up, unless it ignores the mouse', () {
+        for (final layer in [20, 24, 25, 101, 1000]) {
+          expect(
+            macosIsOwnWindowAt(inside, [
+              rec(pid: 7, layer: layer),
+              rec(pid: 42, bounds: full),
+            ], 7),
+            isTrue,
+            reason: 'level $layer',
+          );
+          expect(
+            macosIsOwnWindowAt(inside, [
+              rec(pid: 7, layer: layer, clickThrough: true),
+              rec(pid: 42, bounds: full),
+            ], 7),
+            isFalse,
+            reason: 'click-through at level $layer',
+          );
+        }
+        // A clear one doesn't count either.
+        expect(
+          macosIsOwnWindowAt(inside, [
+            rec(pid: 7, layer: 101, alpha: 0),
+            rec(pid: 42, bounds: full),
+          ], 7),
+          isFalse,
+        );
+      });
+
+      test('other processes\' windows at those levels stay ignored', () {
+        // Another app's menu over the host's dialog: still ignored, as the
+        // Dock's and the menu bar's are, so the host's dialog decides.
+        expect(
+          macosIsOwnWindowAt(inside, [
+            rec(pid: 42, layer: 101),
+            rec(pid: 7),
+          ], 7),
+          isTrue,
+        );
+        expect(
+          macosIsOwnWindowAt(inside, [
+            rec(pid: 42, layer: 101),
+            rec(pid: 43),
+          ], 7),
+          isFalse,
+        );
+      });
+
+      test('the host\'s click-through border doesn\'t hide its menu', () {
+        expect(
+          macosIsOwnWindowAt(onMenu, [
+            rec(pid: 7, layer: 25, bounds: full, clickThrough: true),
+            menu,
+            rec(pid: 42, bounds: full),
+          ], 7),
+          isTrue,
+        );
+      });
+
+      test('an open menu takes the keyboard', () {
+        expect(macosOwnMenuOpen([menu], 7), isTrue);
+        expect(macosOwnMenuOpen(const [], 7), isFalse);
+        // Another app's menu, the host's border, a status-bar window, a
+        // clear menu: not the host's open menu.
+        expect(
+          macosOwnMenuOpen([
+            rec(pid: 42, layer: 101),
+            rec(pid: 7, layer: 25, bounds: full, clickThrough: true),
+            rec(pid: 7, layer: 25),
+            rec(pid: 7, layer: 101, alpha: 0),
+            rec(pid: 7, layer: 101, clickThrough: true),
+          ], 7),
+          isFalse,
+        );
+      });
+
+      test('the resolver: clicks on its menu dropped, keys blocked', () {
+        fakeAsync((async) {
+          native.frontmost = 42;
+          native.screen = [menu, rec(pid: 42, bounds: full)];
+          final r = MacosSurfaceResolver(native);
+          expect(r.isOwnWindowAt(onMenu), isTrue);
+          // A status item's menu: the host isn't the frontmost app.
+          expect(r.isOwnAppInFront(), isTrue);
+          native.screen = [rec(pid: 42, bounds: full)];
+          async.elapse(const Duration(milliseconds: 50));
+          expect(r.isOwnWindowAt(onMenu), isFalse);
+          expect(r.isOwnAppInFront(), isFalse);
+          // An unreadable list blocks keys too.
+          native.screen = null;
+          async.elapse(const Duration(milliseconds: 50));
+          expect(r.isOwnAppInFront(), isTrue);
+        });
+      });
     });
 
     test('the resolver reads the on-screen list, cached for 50 ms', () {

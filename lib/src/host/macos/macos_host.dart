@@ -224,16 +224,29 @@ bool macosIsOccluded(Offset point, MacosWindowInfo window) {
   return false;
 }
 
+/// The pop-up menu window level (`kCGPopUpMenuWindowLevel`): open menus,
+/// the menu bar's and status items' included.
+const int macPopUpMenuWindowLevel = 101;
+
 /// Whether the frontmost window at [point] in [windows] (on screen, front
 /// to back) belongs to process [ownPid], so the viewer would operate the
 /// host app itself: its consent dialog or its Stop button (review H1).
 ///
-/// Only windows that [macosIsOccluded] would count are considered: levels
-/// 0–19 with alpha above 0. So a window of the host app at level 20 or
-/// above (a border at `.statusBar`) never blocks the pointer, and controls
-/// there aren't protected. A click-through window of another app above the
-/// host's own window (one that ignores mouse events but isn't transparent)
-/// hides it from this check, because the window list can't tell which
+/// - **Levels 0–19** with alpha above 0, as [macosIsOccluded] counts them:
+///   the frontmost one containing [point] decides.
+/// - **Levels 20 and up: only the host's own windows count** (RIN-47).
+///   Its open menus (pop-up menu level, 101: the menu bar's menus, its
+///   status item's menu, context menus) and any other window it shows up
+///   there are its own, unless AppKit says the window ignores mouse events
+///   ([MacosWindowRecord.clickThrough]): a click-through border at
+///   `.statusBar` over the shared surface must not block every click.
+///   Other processes' windows at those levels are skipped as before: the
+///   Dock, Notification Center, the menu bar and the cursor are
+///   full-screen, mostly transparent windows above everything.
+///
+/// A click-through window of another app above the host's own window (one
+/// that ignores mouse events but isn't transparent) hides it from this
+/// check, because the window list can't tell which of another process's
 /// windows take clicks.
 bool macosIsOwnWindowAt(
   Offset point,
@@ -241,9 +254,31 @@ bool macosIsOwnWindowAt(
   int ownPid,
 ) {
   for (final w in windows) {
-    if (w.layer < 0 || w.layer >= macDockWindowLevel) continue;
-    if (w.alpha <= 0) continue;
+    if (w.layer < 0 || w.alpha <= 0) continue;
+    if (w.layer >= macDockWindowLevel) {
+      if (w.ownerPid == ownPid && !w.clickThrough && w.bounds.contains(point)) {
+        return true;
+      }
+      continue;
+    }
     if (w.bounds.contains(point)) return w.ownerPid == ownPid;
+  }
+  return false;
+}
+
+/// Whether process [ownPid] has a menu open in [windows] (the on-screen
+/// list): a window of its own at pop-up menu level or above, with alpha
+/// above 0, that takes clicks (RIN-47). An open menu takes the keyboard
+/// (arrows, Return, type-to-select) without its app being the frontmost
+/// one, as a status item's menu does.
+bool macosOwnMenuOpen(List<MacosWindowRecord> windows, int ownPid) {
+  for (final w in windows) {
+    if (w.ownerPid == ownPid &&
+        w.layer >= macPopUpMenuWindowLevel &&
+        w.alpha > 0 &&
+        !w.clickThrough) {
+      return true;
+    }
   }
   return false;
 }
@@ -360,9 +395,11 @@ final class MacosSurfaceResolver implements SurfaceResolver {
     return macosKeyboardPanelOpen(windows, pids);
   }
 
-  /// Whether the frontmost window at [point], among levels 0–19 with alpha
-  /// above 0 (as for occlusion: [macosIsOccluded]), belongs to this
-  /// process. The on-screen window list is cached for
+  /// Whether the window at [point] is this process's own
+  /// ([macosIsOwnWindowAt]): the frontmost one among levels 0–19 with alpha
+  /// above 0 (as for occlusion: [macosIsOccluded]), or one of its own
+  /// windows at level 20 and up that takes clicks, such as an open menu
+  /// (RIN-47). The on-screen window list is cached for
   /// [windowCacheLifetime], like a shared window's. If the list can't be
   /// read, the answer is true: the point might be on the host's own
   /// controls.
@@ -373,9 +410,18 @@ final class MacosSurfaceResolver implements SurfaceResolver {
     return macosIsOwnWindowAt(point, windows, _native.ownPid);
   }
 
-  /// Whether this process is `NSWorkspace.frontmostApplication`.
+  /// Whether keys typed now would go to this process: it's
+  /// `NSWorkspace.frontmostApplication`, or one of its menus is open
+  /// ([macosOwnMenuOpen], RIN-47), as a status item's menu is without its
+  /// app in front. If the window list can't be read, the answer is true.
   @override
-  bool isOwnAppInFront() => _native.frontmostPid() == _native.ownPid;
+  bool isOwnAppInFront() {
+    final own = _native.ownPid;
+    if (_native.frontmostPid() == own) return true;
+    final windows = _onScreenWindows();
+    if (windows == null) return true;
+    return macosOwnMenuOpen(windows, own);
+  }
 
   List<MacosWindowRecord>? _onScreenWindows() {
     final at = _screenAt;
