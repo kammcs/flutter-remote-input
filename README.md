@@ -96,6 +96,8 @@ The package injects input into someone's computer, so:
 
 **Consent, banners, grants, revoke hotkeys and audit logs are your app's job.** The package gives you the states and controls to build them on. [The design's §9](docs/design.md#9-how-the-first-consumer-uses-it) shows how its first consumer uses it, including **who can read the input over an SFU**: restrict subscriptions to the input channels on your server.
 
+**Accepted risks to tell people about** ([design §11](docs/design.md#11-security-model-and-threats)): over an SFU, input is in clear text at the SFU, since DTLS ends there; other software on the presenter's machine (a keylogger, an event tap, a low-level hook) sees the injected keys, so what the viewer types; and on macOS the Accessibility grant stays with your app between sessions until the presenter revokes it, so explain that at onboarding and show where to turn it off.
+
 ## Documentation
 
 - [docs/design.md](docs/design.md): scope, coordinates, the transport, the wire protocol, safety, platform injection, viewer capture, the API, the security model and open questions.
