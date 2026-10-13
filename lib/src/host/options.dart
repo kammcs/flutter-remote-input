@@ -99,10 +99,11 @@ enum ModifierMapping {
 /// releases. A press that's dropped is never injected, so its release has
 /// nothing to release. When a modifier is pressed, the keys already held
 /// are filtered again with it, and those it rejects are released. To
-/// combine filters, call them in one: `(p) => KeyFilters.windowShare(p) &&
-/// myFilter(p)`.
+/// combine filters, pass them to [KeyFilters.all]
+/// (`KeyFilters.all([KeyFilters.windowShare, KeyFilters.noPaste])`), or
+/// call them in one: `(p) => KeyFilters.windowShare(p) && myFilter(p)`.
 ///
-/// [KeyFilters] has a preset for window shares.
+/// [KeyFilters] has presets for window shares and for paste shortcuts.
 typedef KeyFilter = bool Function(KeyPress press);
 
 /// The package's ready-made [KeyFilter]s, and the rule behind
@@ -229,7 +230,73 @@ abstract final class KeyFilters {
     return true;
   }
 
+  /// A preset that drops the **paste shortcuts**, so a viewer can't paste
+  /// the presenter's clipboard, and so read it wherever it lands
+  /// (`docs/design.md` §11, RIN-48). Optional, and not on by default:
+  /// pasting is often what a helper is there for.
+  ///
+  /// It sees keys after modifier mapping and follows the host's OS
+  /// ([KeyPress.hostPlatform]):
+  ///
+  /// - **Windows host:** V with Control (Ctrl+V, Ctrl+Shift+V, Ctrl+Alt+V),
+  ///   Insert with Shift (Shift+Insert), and V with the Windows key (Win+V,
+  ///   the clipboard history);
+  /// - **Mac host:** V with Command (Cmd+V, Cmd+Shift+V, Cmd+Option+Shift+V,
+  ///   "Paste and Match Style");
+  /// - **any host:** the keyboard's own Paste key (HID `0x7007D`);
+  /// - **where the host's OS is unknown,** both lists.
+  ///
+  /// A Mac viewer's Cmd+V reaches a Windows host as Ctrl+V and is dropped
+  /// there, as a Windows viewer's Ctrl+V is on a Mac host.
+  ///
+  /// **What it doesn't stop:** pasting with the pointer (an app's Edit menu
+  /// or a context menu's Paste), a middle click in apps that paste with
+  /// it, drag and drop, an on-screen keyboard's paste key, and shortcuts an
+  /// app or the user assigned to paste. Combine it with other filters with
+  /// [all].
+  static bool noPaste(KeyPress press) {
+    final usage = press.usage;
+    if (usage == _paste) return false;
+    var mods = press.modifiers;
+    for (final m in press.heldModifiers) {
+      mods |= HidModifier.bitOf(m);
+    }
+    bool has(int bit) => mods & bit != 0;
+    final host = press.hostPlatform;
+    if (host != PeerPlatform.macos) {
+      if (usage == _keyV &&
+          (has(KeyModifiers.control) || has(KeyModifiers.meta))) {
+        return false;
+      }
+      if (usage == _insert && has(KeyModifiers.shift)) return false;
+    }
+    if (host != PeerPlatform.windows) {
+      if (usage == _keyV && has(KeyModifiers.meta)) return false;
+    }
+    return true;
+  }
+
+  /// A filter that lets a press through only if every one of [filters]
+  /// does, for combining presets with each other or with the app's own:
+  /// `KeyFilters.all([KeyFilters.windowShare, KeyFilters.noPaste])`.
+  ///
+  /// The filters are called in order and the first that drops the press
+  /// ends it. [filters] is copied, so changing the list afterwards changes
+  /// nothing. An empty list lets everything through.
+  static KeyFilter all(Iterable<KeyFilter> filters) {
+    final list = List<KeyFilter>.unmodifiable(filters);
+    return (press) {
+      for (final f in list) {
+        if (!f(press)) return false;
+      }
+      return true;
+    };
+  }
+
   static const int _keyQ = 0x00070014;
+  static const int _keyV = 0x00070019;
+  static const int _insert = 0x00070049;
+  static const int _paste = 0x0007007D;
   static const int _escape = 0x00070029;
   static const int _tab = 0x0007002B;
   static const int _space = 0x0007002C;
@@ -280,7 +347,9 @@ final class HostOptions {
   final ModifierMapping modifierMapping;
 
   /// Drops key presses the app doesn't want (for example Win+R). None by
-  /// default; for window shares, pass [KeyFilters.windowShare].
+  /// default; for window shares, pass [KeyFilters.windowShare]. To keep
+  /// the viewer from pasting the presenter's clipboard, add
+  /// [KeyFilters.noPaste] ([KeyFilters.all] combines them).
   final KeyFilter? keyFilter;
 
   /// Whether system keys ([KeyFilters.isSystemKey]: power, sleep, media,
