@@ -180,7 +180,9 @@ abstract interface class NativeActivity {
 /// The native counter's reasons, in `REMOTE_INPUT_REASON_*` order
 /// (`windows/remote_input_native.h`).
 enum NativeActivityReason {
-  /// A stall that hid input from the hooks.
+  /// A stall that may have hidden input from the hooks: longer than
+  /// `LowLevelHooksTimeout` (RIN-46), or one in which Windows recorded
+  /// input the hooks never saw.
   missed,
 
   /// A physical key: not injected, by any process.

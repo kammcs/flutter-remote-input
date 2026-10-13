@@ -123,8 +123,9 @@ enum LocalInputSource {
   /// threshold.
   move,
 
-  /// A stall of the monitor during which the OS recorded input the monitor
-  /// never saw.
+  /// A stall of the monitor that may have hidden input: one longer than the
+  /// OS's hook timeout (Windows' `LowLevelHooksTimeout`, RIN-46), or a
+  /// shorter one during which the OS recorded input the monitor never saw.
   missed,
 
   /// The monitor coming back after its hooks were out, so input in the gap

@@ -241,6 +241,11 @@ Built and unit-tested on macOS; the native C++ is compile-checked with mingw-w64
    - **After:** the session stops at once with `localDeviceLost` (host: "Stopped: a keyboard or mouse was disconnected"), and `SessionStats.localInput.details` shows `devicesLost` grow and `inputDevices` drop. Repeat by unplugging a USB mouse's receiver. Plugging a device in doesn't stop anything.
    - **The open point (design §6.3, verify):** if the LE device doesn't stop the session, record `inputDevices` before and after turning Bluetooth off. Unchanged means Windows keeps a disconnected LE device in its raw input list, and RIN-41 needs a radio-state signal on Windows.
 
+12. **A hook stall longer than `LowLevelHooksTimeout` (RIN-46).** First run `remote_input_test.exe`: `StallLongerThanTheHooksTimeoutIsLocalInput`, `HooksTimeoutFollowsTheRegistry` and `HooksTimeoutStringsParseStrictly` pass. Record `reg query "HKCU\Control Panel\Desktop" /v LowLevelHooksTimeout` (usually "unable to find": the package then uses 300 ms). Share a display and pair from a second machine; the viewer moves the pointer in continuous circles (or holds an arrow key, so injected events keep coming).
+   - In Process Explorer, right-click the example's process → **Suspend**; while it's suspended, press a key on the presenter's physical keyboard (in Notepad, say) and click once; then **Resume** after about 2 s (well past the timeout). Expected: `SessionPaused(localInput)` right after resuming (the whole process was frozen, so the viewer sees nothing change during the freeze), and `SessionStats.localInput` shows `missed` grow by one and `longestGapMs` about 2000. **Before the fix** (a commit before RIN-46), record whether it paused at all: the viewer's injected events after the resume could cover the physical key.
+   - The same freeze **without touching anything**: it still pauses once (`missed` + 1). That is the accepted cost; it resumes after 1.5 s.
+   - **Under load, nobody at the machine:** a full-screen share being encoded and the viewer streaming moves for 2 minutes. Record `longestGapMs` and how many times `missed` grew. More than rare pauses here means the 300 ms default is too tight for real loads: report it (design §6.3).
+
 ### C2. macOS: the Accessibility grant and the injection test
 
 Only when the machine is free: the test moves the real pointer and types real keys, into its own window only.
@@ -300,6 +305,9 @@ Fill in one row per run. Result: pass, fail, or n/a with a reason.
 | C1.11 Bluetooth off, before RIN-41 | macOS → Windows (display share) | | | | | expected: control goes on |
 | C1.11 Bluetooth off, after RIN-41, LE device | macOS → Windows (display share) | | | | | expected: `stopped(localDeviceLost)`; record `inputDevices` before and after (design §6.3, verify) |
 | C1.11 Bluetooth off, after RIN-41, classic device | macOS → Windows (display share) | | | | | expected: `stopped(localDeviceLost)`; n/a without one |
+| C1.12 Hook stall past the timeout, before RIN-46 | → Windows (display share) | | | | | record whether a key pressed during a 2 s suspend paused the session |
+| C1.12 Hook stall past the timeout, after RIN-46 | → Windows (display share) | | | | | expected: paused after resume, `missed` + 1; record the registry value and `longestGapMs` |
+| C1.12 Hook stalls under load (RIN-46) | → Windows (display share) | | | | | expected: rare or no `missed`; record `longestGapMs` and the count over 2 minutes |
 | C2.10 Bluetooth off, before RIN-41 | Windows → macOS (display share) | | | | | expected: control goes on |
 | C2.10 Bluetooth off, after RIN-41 | Windows → macOS (display share) | | | | | expected: `stopped(localDeviceLost)`, no Input Monitoring prompt |
 | C2.11 Counter health, stays healthy | Windows → macOS (display share) | | | | | expected: never `localInputUnmonitored`; record `unexplainedPointerMoves` |
