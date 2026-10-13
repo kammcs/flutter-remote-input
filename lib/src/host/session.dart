@@ -777,6 +777,9 @@ final class ControlSession {
     if (m.surfaceEpoch != _epoch) return _drop(DropReason.staleEpoch);
     final held = _heldButtons.contains(m.button);
     if (m.down == held) return _drop(DropReason.notHeld);
+    // A press reads the windows afresh (RIN-56): one that appeared over the
+    // shared window within the resolver's cache must not take the click.
+    if (m.down) _platform.surfaces.refreshWindows();
     var point = _pointFor(m);
     if (point == null) return;
     if (m.down) {

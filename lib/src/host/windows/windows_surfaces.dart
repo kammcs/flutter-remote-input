@@ -83,6 +83,11 @@ final class WindowsSurfaceResolver implements SurfaceResolver {
   @override
   bool isOwnAppInFront() => _isOwn(_api.foregroundWindow());
 
+  /// Nothing to drop: window bounds, the window under a point and the
+  /// foreground window are read from Windows at every check.
+  @override
+  void refreshWindows() {}
+
   int _windowAt(Offset point) =>
       _api.windowFromPoint(desktopPixel(point.dx), desktopPixel(point.dy));
 

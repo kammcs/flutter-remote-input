@@ -30,6 +30,32 @@ void main() {
       });
     });
 
+    test('a press reads the windows afresh; moves and the rest not '
+        '(RIN-56)', () {
+      fakeAsync((async) {
+        final rig = Rig(async);
+        final surfaces = rig.platform.surfaces;
+        rig.viewer.move(30000, 30000);
+        rig.elapse(const Duration(milliseconds: 10));
+        expect(surfaces.windowRefreshes, 0);
+        rig.viewer.button(30000, 30000, PointerButton.left, down: true);
+        rig.flush();
+        expect(surfaces.windowRefreshes, 1);
+        rig.viewer.move(31000, 30000, buttons: 1);
+        rig.elapse(const Duration(milliseconds: 10));
+        rig.viewer
+          ..button(31000, 30000, PointerButton.left, down: false)
+          ..wheel(31000, 30000, dy: 10)
+          ..key(usageA, KeyAction.down)
+          ..key(usageA, KeyAction.up);
+        rig.flush();
+        expect(surfaces.windowRefreshes, 1);
+        rig.viewer.button(31000, 30000, PointerButton.right, down: true);
+        rig.flush();
+        expect(surfaces.windowRefreshes, 2);
+      });
+    });
+
     test('keys are blocked while the host app is in front', () {
       fakeAsync((async) {
         final rig = Rig(async);

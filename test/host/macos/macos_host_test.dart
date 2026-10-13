@@ -343,6 +343,52 @@ void main() {
       });
     });
 
+    test('refreshWindows makes the next checks read afresh (RIN-56)', () {
+      fakeAsync((async) {
+        native.windows[5] = window();
+        native.screen = const [];
+        final r = MacosSurfaceResolver(native);
+        const s = SharedSurface.window(5);
+        const p = Offset(550, 550);
+        expect(r.isOnSurface(s, p), isTrue);
+        expect(r.isOwnWindowAt(p), isFalse);
+        expect((native.windowReads, native.screenReads), (1, 1));
+
+        // 10 ms later, another app's window and a host dialog appear there.
+        async.elapse(const Duration(milliseconds: 10));
+        native.windows[5] = window(
+          above: [
+            const MacosWindowRecord(
+              ownerPid: 99,
+              layer: 0,
+              alpha: 1,
+              bounds: Rect.fromLTWH(500, 500, 100, 100),
+            ),
+          ],
+        );
+        native.screen = const [
+          MacosWindowRecord(
+            ownerPid: 7,
+            layer: 0,
+            alpha: 1,
+            bounds: Rect.fromLTWH(500, 500, 100, 100),
+          ),
+        ];
+        // Moves keep the cache.
+        expect(r.isOnSurface(s, p), isTrue);
+        expect(r.isOwnWindowAt(p), isFalse);
+        expect((native.windowReads, native.screenReads), (1, 1));
+        // A press doesn't.
+        r.refreshWindows();
+        expect(r.isOnSurface(s, p), isFalse);
+        expect(r.isOwnWindowAt(p), isTrue);
+        expect((native.windowReads, native.screenReads), (2, 2));
+        // And what it read is cached again.
+        r.resolve(s);
+        expect(native.windowReads, 2);
+      });
+    });
+
     test('handles outside the CGWindowID range are gone', () {
       final r = MacosSurfaceResolver(native);
       expect(r.resolve(const SharedSurface.window(-1)), isNull);
@@ -1005,6 +1051,54 @@ void main() {
           (keyCodeShift, false, 0),
         ]);
         expect(native.calls.whereType<TextCall>().single.text, 'hi');
+
+        session.stop();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('a press sees a window that appeared within the cache (RIN-56)', () {
+      fakeAsync((async) {
+        native.windows[5] = window(pid: 42);
+        native.frontmost = 42;
+        final pair = MemoryInputLink.pair();
+        final session = RemoteInputHost(platform: MacosHostPlatform(native))
+            .enable(link: pair.host, surface: const SharedSurface.window(5));
+        final viewer = RemoteInputViewer(link: pair.viewer);
+        async.elapse(const Duration(milliseconds: 20));
+        expect(session.state, const SessionActive());
+
+        // A move to the centre reads (and caches) the window and the list.
+        viewer.pointerMove(const Offset(0.5, 0.5));
+        async.elapse(const Duration(milliseconds: 10));
+        expect(native.mouse, hasLength(1));
+
+        // Within the 50 ms cache, another app's window opens over the
+        // centre.
+        native.windows[5] = window(
+          pid: 42,
+          above: [
+            const MacosWindowRecord(
+              ownerPid: 99,
+              layer: 0,
+              alpha: 1,
+              bounds: Rect.fromLTWH(450, 350, 100, 100),
+            ),
+          ],
+        );
+        // A move there still goes by the cache...
+        viewer.pointerMove(const Offset(0.51, 0.5));
+        async.elapse(const Duration(milliseconds: 10));
+        expect(native.mouse, hasLength(2));
+        // ...but a press reads the window list again, and is dropped.
+        viewer.pointerButton(
+          const Offset(0.5, 0.5),
+          PointerButton.left,
+          down: true,
+        );
+        async.elapse(const Duration(milliseconds: 5));
+        expect(native.mouse, hasLength(2));
+        expect(session.stats.dropped[DropReason.occluded], 1);
 
         session.stop();
         async.flushMicrotasks();

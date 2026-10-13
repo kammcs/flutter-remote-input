@@ -308,7 +308,9 @@ bool macosKeyboardPanelOpen(
 /// 0.3 ms for the windows above it, measured on macOS 27) and cached for
 /// [windowCacheLifetime], so pointer moves at 250 Hz cost at most 20 reads
 /// a second (open question 4). The whole on-screen list, for
-/// [isOwnWindowAt], is cached the same way (0.3 to 0.6 ms a read). Displays
+/// [isOwnWindowAt], is cached the same way (0.3 to 0.6 ms a read). A button
+/// press drops both caches first ([refreshWindows], RIN-56), so a window
+/// that appeared within the cache's lifetime can't take a click. Displays
 /// are cached until the display configuration changes, or for
 /// [displayCacheLifetime].
 final class MacosSurfaceResolver implements SurfaceResolver {
@@ -421,6 +423,19 @@ final class MacosSurfaceResolver implements SurfaceResolver {
     final windows = _onScreenWindows();
     if (windows == null) return true;
     return macosOwnMenuOpen(windows, own);
+  }
+
+  /// Drops the cached window info and on-screen list (RIN-56): the session
+  /// calls this before checking a button press, so a window that appeared
+  /// over the shared one within [windowCacheLifetime] can't take the click.
+  /// Moves keep the cache. The reads cost about 0.5 ms each (the window
+  /// with the windows above it, and the on-screen list), so about 1 ms a
+  /// press on a window share, measured on macOS 27. The keyboard-panel
+  /// processes and the display list keep their caches.
+  @override
+  void refreshWindows() {
+    _windowAt = null;
+    _screenAt = null;
   }
 
   List<MacosWindowRecord>? _onScreenWindows() {
