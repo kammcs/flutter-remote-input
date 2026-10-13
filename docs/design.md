@@ -195,7 +195,7 @@ The host sends `HostHello` when the app enables a session and the link is open. 
 
 Codes for buttons, key actions, wheel units, platforms (0 unknown, 1 Windows, 2 macOS, 3 Linux, 4 iOS, 5 Android, 6 Fuchsia) and state reasons are in `lib/src/protocol/wire_types.dart`, pinned by the golden-byte tests. `HostState.reason` is a code in the enum its `state` uses (`PauseReason`, `BlockReason`, `StopReason`), and a receiver maps a code it doesn't know to `other`, so hosts can add reasons within v1. Added so far: `StopReason.localDeviceLost` (14, RIN-41; §6.3), which older viewers show as `other`. A viewer in a browser reports the OS the browser runs on (it decides the shortcuts) and sets capability bit 0 (`web`).
 
-Types `0xC0`–`0xFF` are reserved for **ignorable extensions**: a host that doesn't know one drops it silently. Any other unknown type counts as a violation (§6.4).
+Types `0xC0`–`0xFF` are reserved for **ignorable extensions**: a host that doesn't know one drops it silently, counted against a rate limit of its own (§6.4, RIN-55) but never as a violation. Any other unknown type counts as a violation (§6.4).
 
 ### 5.3 Ordering, stale moves and coalescing
 
@@ -235,7 +235,7 @@ The HID-to-scan-code and HID-to-`CGKeyCode` tables are built from the USB HID Us
 
 ### 5.5 Versioning
 
-- `HostHello` offers a version range; `Hello` picks one. A viewer with no common version gets `Bye(unsupportedVersion)` and the host's state stays waiting.
+- `HostHello` offers a version range; `Hello` picks one. A viewer with no common version gets `Bye(unsupportedVersion)` and the host's state stays waiting. The host answers such a `Hello` at most once a second and drops the rest (RIN-55), so a stream of them can't make it send a `Bye` for each.
 - **Within v1:** new message types go in the ignorable range or behind `capabilities` bits; new fields go **at the end** of a body, and decoders ignore trailing bytes. A body shorter than its type's v1 size is malformed.
 - **A breaking change is v2.** Hosts keep accepting v1 for at least one minor release after v2 ships.
 - **Golden-byte tests** pin every message's encoding (§12). Changing them is a protocol change.
@@ -287,7 +287,9 @@ Defaults, which the app can lower but not raise past the caps:
 | Text rate | 200 characters/s, bursts to 400 | 1000/s, bursts to 2000 |
 | Moves applied | 250/s, coalesced (excess dropped) | 500/s |
 | Keys, buttons and wheel events | 60/s, bursts to 120 (token bucket) | 200/s, bursts to 400 |
-| Pings answered | 10/s, bursts to 20 | — |
+| Pings answered | 10/s, bursts to 20 (the rest dropped, `rateLimited`) | — |
+| Ignorable extension messages (`0xC0`–`0xFF`) | 10/s, bursts to 20 (the rest dropped, `rateLimited`) | — |
+| `Bye` for a wrong-version `Hello` | 1 a second (the rest dropped, `rateLimited`) | — |
 | Wheel delta per message | ±1200 pixels or ±10 lines (clamped) | — |
 | Keys held at once | 8 | 16 |
 | Queued reliable input | 64 events | 256 |
@@ -305,6 +307,7 @@ Defaults, which the app can lower but not raise past the caps:
 - **Over the rate limits, reliable input queues; it isn't dropped.** Dropping a key release would leave a key stuck, so keys, buttons, wheel events and text wait in one ordered queue for their token bucket. Long text is typed in pieces as tokens refill. Moves wait while the queue isn't empty, so they never overtake it. A full queue stops the session with `stopped(flooding)`.
 - **Text never acts like keys.** Control characters other than tab, line feed and carriage return (Escape, Backspace, the C1 range) are stripped from `Text` before it's typed.
 - **Violations** (malformed, unknown type, replayed `seq`, wrong session tag, wrong channel, a host-only message, oversized) are dropped and counted in `session.stats`. More than 50 in 10 s **stops the session** with `stopped(protocolViolation)`.
+- **Control messages over their limits** (RIN-55): pings, ignorable extension messages and wrong-version `Hello`s past their buckets are dropped and counted as `DropReason.rateLimited`. They aren't violations and don't stop the session by themselves, as excess pings never have: none of them injects anything, and each bucket is its own, so a flood of one doesn't starve pings or input. Before RIN-55 ignorable extensions were counted against nothing, and every wrong-version `Hello` got a `Bye`.
 
 ### 6.5 No injection into elevated or secure contexts
 

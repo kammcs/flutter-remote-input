@@ -86,6 +86,12 @@ enum DropReason {
 
   /// The OS refused it, or the surface's bounds were unusable.
   failed,
+
+  /// A control message over its rate limit (`docs/design.md` §6.4,
+  /// RIN-55): a ping not answered, an ignorable extension message, or a
+  /// `Hello` with a version the host doesn't speak, answered at most once
+  /// a second. Never input, and never a violation.
+  rateLimited,
 }
 
 /// Messages counted as protocol violations (`docs/design.md` §6.4). More
