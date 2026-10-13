@@ -1,7 +1,12 @@
 import '../protocol/wire_types.dart';
 
-/// Something a host can't control, for apps to show in their UI
-/// (`docs/design.md` §7.4). Localize by value; [description] is English.
+/// Something a host can't control, or a gap in what it can prevent, for
+/// apps to show in their UI (`docs/design.md` §7.4). Localize by value;
+/// [description] is English.
+///
+/// Most are things a viewer **can't control** ("Can't be controlled").
+/// Those with [isGap] are the opposite: things the host's controls **don't
+/// prevent**, which an app lists apart ("Not prevented").
 enum HostLimitation {
   /// Windows: anything, while the host app runs as administrator, unless
   /// the app opts in (`HostOptions.allowElevatedHost`).
@@ -26,7 +31,8 @@ enum HostLimitation {
   systemKeys('Power, sleep, media and app-launch keys, and Fn'),
 
   /// macOS: typing into password fields and other secure input. The
-  /// pointer still works there.
+  /// pointer still works there, and can type through an on-screen keyboard
+  /// ([pointerTyping]).
   passwordFields('Typing into password fields'),
 
   /// macOS: the login window, the lock screen and fast user switching.
@@ -38,12 +44,30 @@ enum HostLimitation {
   ),
 
   /// Web, iOS, Android and Linux can't be controlled at all.
-  unsupportedPlatform('This device can be a viewer, but cannot be controlled');
+  unsupportedPlatform('This device can be a viewer, but cannot be controlled'),
 
-  const HostLimitation(this.description);
+  /// Both, a gap ([isGap]): `HostOptions.allowKeyboard: false`, the
+  /// macOS password-field block ([passwordFields]) and every `KeyFilter`
+  /// cover keys sent as keys. With the pointer alone a viewer can still
+  /// type, and use shortcuts, through an on-screen keyboard (the macOS
+  /// Accessibility Keyboard and Character Viewer; the Windows touch
+  /// keyboard and `osk.exe`), and paste from an Edit or context menu
+  /// (`docs/design.md` §6.5, RIN-49).
+  pointerTyping(
+    'Typing and pasting with the pointer, through an on-screen keyboard '
+    'or a menu, even with keys turned off',
+    isGap: true,
+  );
 
-  /// A short English description, for a list headed "Can't be controlled".
+  const HostLimitation(this.description, {this.isGap = false});
+
+  /// A short English description: for a list headed "Can't be
+  /// controlled", or for one headed "Not prevented" when [isGap].
   final String description;
+
+  /// Whether this is a gap in what the host prevents, rather than
+  /// something a viewer can't control: list it apart from the others.
+  final bool isGap;
 
   /// What a host on [platform] can't control. Browsers report the OS they
   /// run on, so pass `isWeb` for them.
@@ -60,12 +84,14 @@ enum HostLimitation {
         ctrlAltDel,
         someGames,
         systemKeys,
+        pointerTyping,
       ],
       PeerPlatform.macos => const [
         accessibilityPermission,
         passwordFields,
         lockScreen,
         systemKeys,
+        pointerTyping,
       ],
       _ => const [unsupportedPlatform],
     };

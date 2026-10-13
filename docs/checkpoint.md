@@ -241,6 +241,8 @@ Built and unit-tested on macOS; the native C++ is compile-checked with mingw-w64
    - **After:** the session stops at once with `localDeviceLost` (host: "Stopped: a keyboard or mouse was disconnected"), and `SessionStats.localInput.details` shows `devicesLost` grow and `inputDevices` drop. Repeat by unplugging a USB mouse's receiver. Plugging a device in doesn't stop anything.
    - **The open point (design §6.3, verify):** if the LE device doesn't stop the session, record `inputDevices` before and after turning Bluetooth off. Unchanged means Windows keeps a disconnected LE device in its raw input list, and RIN-41 needs a radio-state signal on Windows.
 
+12. **Typing with the pointer (RIN-49; design §6.5, verify).** Share a display, with keys off for the session (`HostOptions(allowKeyboard: false)` in a local build, not committed). The viewer opens the On-Screen Keyboard (Start → `osk`) and types into Notepad with it: record whether it types (expected: yes, a documented gap). Then open an elevated Command Prompt on the host (Run as administrator) and click it from the host's own mouse, so it's in front: the viewer clicks letters on the On-Screen Keyboard. **Record whether they reach the elevated window** (design §6.5: `osk.exe` runs with UI Access, which UIPI exempts). Repeat with the touch keyboard (the taskbar's keyboard icon). With a window share of Notepad instead, put the On-Screen Keyboard over Notepad: the viewer's clicks on it should be dropped (`occluded`).
+
 ### C2. macOS: the Accessibility grant and the injection test
 
 Only when the machine is free: the test moves the real pointer and types real keys, into its own window only.
@@ -266,6 +268,8 @@ Only when the machine is free: the test moves the real pointer and types real ke
     - **Stays healthy:** share a display and pair. The viewer moves in circles for 30 s and types; then the presenter moves their own mouse and trackpad, slowly and fast, across every display, while the viewer is idle; then both at once. Unplug or rearrange a display (System Settings → Displays) during a session. Expected: never `SessionBlocked(localInputUnmonitored)`; the presenter's movement pauses as in step 7; `staleCounterTrips` stays absent (0). A few `unexplainedPointerMoves` are fine; record the count.
     - **Fails closed:** run another tool that moves the pointer without the mouse while a session is active, for example `swift -e 'import CoreGraphics; for i in 0..<20 { CGWarpMouseCursorPosition(CGPoint(x: 200 + i * 30, y: 300)); usleep(50_000) }'` in Terminal (it needs no permission). Expected: `SessionBlocked(localInputUnmonitored)` within about 20 ms of the second warp, `staleCounterTrips: 1`, the viewer's input dropped; then moving the presenter's own mouse: `SessionPaused(localInput)` once, then `SessionActive` about 1.5 s later.
     - **Bad sign:** `localInputUnmonitored` with nothing but the presenter's own mouse or trackpad moving means the HID counters don't see that device: record the device, its driver software (Logitech Options+, SteerMouse, a tablet driver) and `staleCounterTrips`.
+
+12. **Typing with the pointer (RIN-49; design §6.5, verify).** Share a display, with keys off for the session (`HostOptions(allowKeyboard: false)` in a local build, not committed). Turn on the Accessibility Keyboard (System Settings → Accessibility → Keyboard) and have the viewer type into TextEdit with it: record whether it types (expected: yes, a documented gap). Then focus a password field (Safari's or a `sudo` prompt in Terminal with Secure Keyboard Entry on: the session shows `blocked(secureInput)` for keys) and have the viewer click letters on the Accessibility Keyboard, then pick a character from the Character Viewer (Edit → Emoji & Symbols): **record whether either reaches the field.** With a window share of TextEdit, put the Accessibility Keyboard over TextEdit: **record whether the viewer's clicks on it are dropped** (`occluded`) or go through (its window level is 20 or above, which the occlusion check ignores).
 
 ### C3. macOS: the App Sandbox test (design §7.3, open question 1)
 
@@ -304,6 +308,8 @@ Fill in one row per run. Result: pass, fail, or n/a with a reason.
 | C2.10 Bluetooth off, after RIN-41 | Windows → macOS (display share) | | | | | expected: `stopped(localDeviceLost)`, no Input Monitoring prompt |
 | C2.11 Counter health, stays healthy | Windows → macOS (display share) | | | | | expected: never `localInputUnmonitored`; record `unexplainedPointerMoves` |
 | C2.11 Counter health, fails closed | Windows → macOS (display share) | | | | | expected: blocked after a pointer warp, `staleCounterTrips: 1`, recovers on a mouse move |
+| C1.12 Typing with the pointer (RIN-49) | → Windows (display share, keys off) | | | | | `osk.exe` types: expected yes; into an elevated window: record; over a window share: dropped |
+| C2.12 Typing with the pointer (RIN-49) | → macOS (display share, keys off) | | | | | Accessibility Keyboard types: expected yes; into a password field: record; over a window share: record |
 | C3.6 Lost devices, sandboxed | macOS | | | | | expected: `stopped(localDeviceLost)`, no Input Monitoring prompt |
 | C3.7 Counter health, sandboxed | macOS | | | | | expected: own mouse pauses (healthy); a warp blocks (fails closed) |
 | A1 Pointer | Windows → macOS | | | | | |

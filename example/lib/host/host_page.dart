@@ -684,7 +684,9 @@ class _Limitations extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final limits = RemoteInputHost.limitations;
+    final all = RemoteInputHost.limitations;
+    final limits = all.where((l) => !l.isGap).toList();
+    final gaps = all.where((l) => l.isGap).toList();
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -707,6 +709,25 @@ class _Limitations extends StatelessWidget {
                   ],
                 ),
               ),
+            if (gaps.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Not prevented',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              for (final l in gaps)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('•  '),
+                      Expanded(child: Text(l.description)),
+                    ],
+                  ),
+                ),
+            ],
             if (kIsWeb)
               const Padding(
                 padding: EdgeInsets.only(top: 8),

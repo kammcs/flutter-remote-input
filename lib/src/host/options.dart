@@ -331,6 +331,12 @@ final class HostOptions {
 
   /// Whether keys and text are injected. When false they're dropped, and
   /// only the pointer is controlled.
+  ///
+  /// **The pointer can still type** (RIN-49): through an on-screen
+  /// keyboard (the macOS Accessibility Keyboard or Character Viewer, the
+  /// Windows touch keyboard or `osk.exe`) or Paste in a menu, if the
+  /// viewer can reach one on the shared surface
+  /// (`HostLimitation.pointerTyping`, `docs/design.md` §6.5).
   final bool allowKeyboard;
 
   /// How the session resumes after local input pauses it.

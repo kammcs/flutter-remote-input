@@ -164,7 +164,8 @@ enum BlockReason {
   secureDesktop(2),
 
   /// Secure Event Input is on (macOS: a password field has focus). Blocks
-  /// keys only; the pointer continues.
+  /// keys only; the pointer continues, and can type through an on-screen
+  /// keyboard (`HostLimitation.pointerTyping`).
   secureInput(3),
 
   /// The user's session isn't active (macOS: the login window, the lock
