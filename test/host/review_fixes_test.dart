@@ -200,14 +200,25 @@ void main() {
 
   test('points never leave the surface, whatever the insets (L3)', () {
     fakeAsync((async) {
+      // Negative insets are refused (RIN-51; test/host/surface_bounds_test).
+      expect(
+        () => RemoteInputHost(platform: FakeHostPlatform()).enable(
+          link: MemoryInputLink.pair().host,
+          surface: RectSurface(
+            const Rect.fromLTWH(0, 0, 100, 100),
+            contentInsets: const EdgeInsets.only(left: -50),
+          ),
+        ),
+        throwsArgumentError,
+      );
       final surface = RectSurface(
         const Rect.fromLTWH(0, 0, 100, 100),
-        contentInsets: const EdgeInsets.only(left: -50),
+        contentInsets: const EdgeInsets.only(left: 50),
       );
       final rig = Rig(async, surface: surface);
       rig.viewer.button(0, 0, PointerButton.left, down: true);
       rig.flush();
-      expect((rig.events.single as InjectedButton).point.dx, 0);
+      expect((rig.events.single as InjectedButton).point.dx, closeTo(50, 0.01));
 
       surface.update(const Rect.fromLTWH(0, 0, double.nan, 100));
       rig.viewer.wheel(0, 0, dy: 1);

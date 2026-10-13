@@ -94,8 +94,8 @@ final class RemoteInputHost {
   ///   ([checkAvailable] with [options]), including
   ///   [HostUnavailableReason.elevatedHost] for a Windows host run as
   ///   administrator, unless [HostOptions.allowElevatedHost];
-  /// - an [ArgumentError] if [surface] can't be found, or
-  ///   [HostOptions.expiresAt] has passed.
+  /// - an [ArgumentError] if [surface] can't be found or has a negative
+  ///   `contentInsets` value, or [HostOptions.expiresAt] has passed.
   ControlSession enable({
     required InputLink link,
     required SharedSurface surface,

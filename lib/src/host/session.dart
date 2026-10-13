@@ -227,9 +227,10 @@ final class ControlSession {
   /// Held buttons are released.
   ///
   /// Throws a [StateError] after the session stopped, and an [ArgumentError]
-  /// if [surface] can't be found.
+  /// if [surface] can't be found or has a negative `contentInsets` value.
   void changeSurface(SharedSurface surface) {
     if (_stopped) throw StateError('The session has stopped');
+    checkContentInsets(surface);
     final geometry = _geometryOf(surface);
     if (geometry == null) {
       throw ArgumentError.value(surface, 'surface', 'is not available');
@@ -252,6 +253,7 @@ final class ControlSession {
   // --- Lifecycle ------------------------------------------------------------
 
   void _start() {
+    checkContentInsets(_surface);
     final geometry = _geometryOf(_surface);
     if (geometry == null) {
       throw ArgumentError.value(_surface, 'surface', 'is not available');
@@ -1043,12 +1045,9 @@ final class ControlSession {
       _drop(DropReason.failed);
       return null;
     }
-    final p = mapNormalizedPoint(m.x, m.y, bounds);
-    // Never outside the surface, whatever the insets.
-    return Offset(
-      p.dx.clamp(outer.left, outer.right),
-      p.dy.clamp(outer.top, outer.bottom),
-    );
+    // Never outside the surface: the right and bottom edges are outside
+    // it, so the clamp stops just short of them (RIN-51).
+    return clampToSurface(mapNormalizedPoint(m.x, m.y, bounds), outer);
   }
 
   static bool _isUsable(Rect r) =>
