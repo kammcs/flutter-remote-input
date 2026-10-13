@@ -72,10 +72,15 @@ enable_testing()
 
 # Add the Google Test dependency. The template's 1.11.0 declares a CMake
 # minimum below 3.5, which current CMake (CI's Windows runner) refuses.
+# Pinned by hash (RIN-54): a changed archive fails the build instead of
+# being compiled into the test runner. The hash is the SHA-256 of this exact
+# URL's download (tag v1.15.2, commit b514bdc898e2951020cbdca1304b75f5950d1f59,
+# named in the archive's comment); it was the same over two downloads.
 include(FetchContent)
 FetchContent_Declare(
   googletest
   URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.zip
+  URL_HASH SHA256=f179ec217f9b3b3f3c6e8b02d3e7eda997b49e4ce26d6b235c9053bec9c0bf9f
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 # Prevent overriding the parent project's compiler/linker settings
