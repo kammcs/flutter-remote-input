@@ -292,6 +292,13 @@ final class ControlSession {
       );
     }
     _subscriptions.add(reliable.openChanges.listen(_onOpenChanged));
+    if (_platform case final HostRevocation revocation) {
+      // On Wayland, the presenter's Stop in the system's indicator closes
+      // the portal session: stop now, not at the next injected event.
+      _subscriptions.add(
+        revocation.revoked.listen((_) => _stop(StopReason.permissionDenied)),
+      );
+    }
     final monitor = _platform.localActivity;
     if (monitor != null) {
       _subscriptions.add(monitor.activity.listen((_) => _onLocalActivity()));

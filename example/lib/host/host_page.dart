@@ -324,6 +324,9 @@ class _HostPageState extends State<HostPage> {
                     'control administrator apps. Start it normally.',
               HostUnavailableReason.unsupportedPlatform =>
                 'This platform has no injector.',
+              HostUnavailableReason.waylandNotAllowed =>
+                'This is a Wayland session, and the example did not opt in '
+                    'to Wayland control.',
             }),
           ),
         ),

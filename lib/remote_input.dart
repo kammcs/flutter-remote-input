@@ -36,6 +36,7 @@ export 'src/host/options.dart'
 export 'src/host/platform.dart'
     show
         HostPlatform,
+        HostRevocation,
         HostUnavailableException,
         HostUnavailableReason,
         InjectResult,
@@ -47,6 +48,15 @@ export 'src/host/platform.dart'
         LocalInputDiagnostics,
         SecureContextProbe,
         SurfaceResolver;
+export 'src/host/linux/linux_portal.dart'
+    show
+        PortalCloseReason,
+        PortalCursorMode,
+        PortalSourceType,
+        PortalStartResult,
+        PortalStartStatus,
+        PortalStream,
+        RemoteInputPortal;
 export 'src/host/session.dart' show ControlSession;
 export 'src/keys.dart' show HidModifier;
 export 'src/link.dart' show InputChannel, InputLink;

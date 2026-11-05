@@ -18,11 +18,7 @@ void main() {
         contains(HostLimitation.systemKeys),
       );
     }
-    for (final p in [
-      PeerPlatform.ios,
-      PeerPlatform.android,
-      PeerPlatform.linux,
-    ]) {
+    for (final p in [PeerPlatform.ios, PeerPlatform.android]) {
       expect(HostLimitation.forPlatform(p), [
         HostLimitation.unsupportedPlatform,
       ]);
@@ -32,8 +28,44 @@ void main() {
     ]);
   });
 
-  test('pointer typing is a gap on both host platforms (RIN-49)', () {
-    for (final p in [PeerPlatform.windows, PeerPlatform.macos]) {
+  test('Linux lists its own, and Wayland its gaps (RIN-58)', () {
+    final x11 = HostLimitation.forPlatform(PeerPlatform.linux);
+    expect(
+      x11,
+      containsAll([
+        HostLimitation.rootHost,
+        HostLimitation.lockScreen,
+        HostLimitation.systemKeys,
+        HostLimitation.pointerTyping,
+        HostLimitation.adminPrompts,
+      ]),
+    );
+    expect(x11, isNot(contains(HostLimitation.waylandLocalInput)));
+    final wayland = HostLimitation.forPlatform(
+      PeerPlatform.linux,
+      linuxWayland: true,
+    );
+    expect(
+      wayland,
+      containsAll([
+        HostLimitation.portalConsent,
+        HostLimitation.layoutText,
+        HostLimitation.waylandLocalInput,
+        HostLimitation.waylandHostWindows,
+        HostLimitation.waylandWindowShares,
+      ]),
+    );
+    expect(HostLimitation.forPlatform(PeerPlatform.linux, isWeb: true), [
+      HostLimitation.unsupportedPlatform,
+    ]);
+  });
+
+  test('pointer typing is a gap on every host platform (RIN-49)', () {
+    for (final p in [
+      PeerPlatform.windows,
+      PeerPlatform.macos,
+      PeerPlatform.linux,
+    ]) {
       expect(
         HostLimitation.forPlatform(p),
         contains(HostLimitation.pointerTyping),
@@ -44,9 +76,13 @@ void main() {
       HostLimitation.forPlatform(PeerPlatform.android),
       isNot(contains(HostLimitation.pointerTyping)),
     );
-    // Only it is a gap: the rest are what can't be controlled.
+    // These are gaps; the rest are what can't be controlled.
     expect(HostLimitation.values.where((l) => l.isGap), [
       HostLimitation.pointerTyping,
+      HostLimitation.adminPrompts,
+      HostLimitation.waylandLocalInput,
+      HostLimitation.waylandHostWindows,
+      HostLimitation.waylandWindowShares,
     ]);
   });
 

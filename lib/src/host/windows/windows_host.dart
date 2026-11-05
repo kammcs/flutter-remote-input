@@ -33,7 +33,10 @@ final class WindowsHostPlatform implements HostPlatform {
   /// Then [HostUnavailableReason.elevatedHost] when this process
   /// [isElevated], unless [allowElevatedHost].
   @override
-  HostUnavailableReason? checkAvailable({bool allowElevatedHost = false}) {
+  HostUnavailableReason? checkAvailable({
+    bool allowElevatedHost = false,
+    bool allowWayland = false,
+  }) {
     if (!api.isPerMonitorAwareV2()) return HostUnavailableReason.dpiUnaware;
     if (!allowElevatedHost && isElevated) {
       return HostUnavailableReason.elevatedHost;

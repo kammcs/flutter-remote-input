@@ -15,13 +15,17 @@ abstract interface class HostPlatform {
   PeerPlatform get platform;
 
   /// Why the host can't inject now, or `null` if it can. Checked when a
-  /// session is enabled, with [allowElevatedHost] from its
-  /// `HostOptions.allowElevatedHost`.
+  /// session is enabled, with [allowElevatedHost] and [allowWayland] from
+  /// its `HostOptions`.
   ///
   /// A platform that reports [HostUnavailableReason.elevatedHost] does so
   /// only when [allowElevatedHost] is false, and only once every other
-  /// check has passed.
-  HostUnavailableReason? checkAvailable({bool allowElevatedHost = false});
+  /// check has passed. [HostUnavailableReason.waylandNotAllowed] is
+  /// reported only on a Wayland host, without [allowWayland].
+  HostUnavailableReason? checkAvailable({
+    bool allowElevatedHost = false,
+    bool allowWayland = false,
+  });
 
   /// Posts OS input events.
   InputInjector get injector;
@@ -40,11 +44,14 @@ abstract interface class HostPlatform {
 
 /// Why a host can't inject.
 enum HostUnavailableReason {
-  /// This platform has no injector (web, phones, Linux:
-  /// `docs/design.md` §2.2).
+  /// This platform has no injector (web, phones: `docs/design.md` §2.2),
+  /// or a Linux host has neither an X11 nor a Wayland session, or Wayland
+  /// support wasn't built in (no libei at build time).
   unsupportedPlatform,
 
-  /// The OS permission to post input is missing (macOS Accessibility).
+  /// The OS permission to post input is missing: macOS Accessibility, or
+  /// on Wayland no RemoteDesktop portal session is open
+  /// (`RemoteInputPortal.start`).
   permissionDenied,
 
   /// The process isn't per-monitor DPI aware (Windows), so its coordinates
@@ -57,7 +64,14 @@ enum HostUnavailableReason {
   /// (`docs/design.md` §6.5). Refused unless the app opts in with
   /// `HostOptions.allowElevatedHost`. Reported only when nothing else
   /// stops the host, so an app that opted in can treat it as available.
+  /// On Linux, the host runs as root.
   elevatedHost,
+
+  /// The host is a Wayland session, whose safety controls have gaps the
+  /// other platforms don't (`docs/design.md` §7.5, the
+  /// `HostLimitation.isGap` entries of `RemoteInputHost.limitations`), and
+  /// the app hasn't opted in with `HostOptions.allowWayland`.
+  waylandNotAllowed,
 }
 
 /// Thrown by `RemoteInputHost` when the host can't inject.
@@ -191,6 +205,19 @@ abstract interface class LocalDeviceMonitor {
 abstract interface class LocalInputDiagnostics {
   /// The counts so far. Cheap: read on demand, never polled.
   LocalInputCounts get localInputCounts;
+}
+
+/// A [HostPlatform] whose permission to inject can end while a session is
+/// live: on Wayland, the RemoteDesktop portal session closes when the
+/// presenter stops it from the system's indicator. A separate interface, so
+/// platforms without it still implement [HostPlatform] alone.
+///
+/// A session whose platform implements this stops with
+/// `StopReason.permissionDenied` at the first event on [revoked], without
+/// waiting for its next injected event to fail.
+abstract interface class HostRevocation {
+  /// An event each time the permission to inject ends.
+  Stream<void> get revoked;
 }
 
 /// The kind of input a check is for.
