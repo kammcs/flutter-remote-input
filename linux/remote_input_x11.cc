@@ -6,6 +6,7 @@
 // X protocol errors on the package's connections (a window that has gone, for
 // example) are trapped by a handler that passes every other connection's
 // errors on to the handler it replaced (GDK's), so GDK keeps its own traps.
+#include <X11/XKBlib.h>
 #include <X11/Xatom.h>
 #include <X11/Xlib-xcb.h>
 #include <X11/Xlib.h>
@@ -13,6 +14,7 @@
 #include <X11/extensions/XInput2.h>
 #include <X11/extensions/XTest.h>
 #include <X11/extensions/Xrandr.h>
+#include <time.h>
 #include <unistd.h>
 #include <xcb/xcb.h>
 
@@ -47,18 +49,35 @@ int OnXError(Display* display, XErrorEvent* error) {
   return g_previous_handler ? g_previous_handler(display, error) : 0;
 }
 
-// Spare keycodes for text: keycodes with no keysyms, bound to a character
-// while it's typed, least recently used first.
-constexpr int kPoolSize = 8;
+// Spare keycodes for text the layout can't type: keycodes with no keysyms,
+// each bound to a character while it's typed, least recently used first.
+//
+// X clients translate a key event with the keymap as it is when they read
+// the event, fetched afresh after a MappingNotify, not as it was when the key
+// was pressed. So a keycode is never rebound within kRebindAfterMs of its
+// last press (a character that would need it is skipped instead), and the
+// pool is as large as the keymap allows.
+constexpr int kPoolSize = 128;
+constexpr int64_t kRebindAfterMs = 1000;
 struct PoolEntry {
   int keycode = 0;
   KeySym keysym = NoSymbol;
-  uint64_t used = 0;
+  int64_t used_ms = 0;
 };
 PoolEntry g_pool[kPoolSize];
 int g_pool_count = -1;  // -1: not looked for yet.
 int g_keysyms_per_keycode = 0;
-uint64_t g_pool_clock = 0;
+
+int64_t NowMs() {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<int64_t>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+}
+
+// The keyboard description for typing text with the layout, refreshed at
+// most every second (a layout change shows within that).
+XkbDescPtr g_xkb = nullptr;
+int64_t g_xkb_read_ms = 0;
 
 Atom g_net_active_window = None;
 Atom g_net_wm_pid = None;
@@ -241,6 +260,58 @@ void FindPool() {
   XFree(map);
 }
 
+// A key and the modifiers (Shift, Mod5 for AltGr) that type [sym] with the
+// current layout group and locked modifiers (Caps Lock counts). Returns
+// false if the layout can't.
+bool FindInLayout(KeySym sym, KeyCode* key, unsigned int* mods) {
+  const int64_t now = NowMs();
+  if (g_xkb == nullptr || now - g_xkb_read_ms > 1000) {
+    if (g_xkb != nullptr) XkbFreeKeyboard(g_xkb, 0, True);
+    g_xkb = XkbGetMap(g_dpy, XkbAllClientInfoMask, XkbUseCoreKbd);
+    g_xkb_read_ms = now;
+    t_error = 0;
+  }
+  if (g_xkb == nullptr) return false;
+  XkbStateRec state;
+  if (XkbGetState(g_dpy, XkbUseCoreKbd, &state) != Success) return false;
+  const unsigned int locked = state.locked_mods;
+  const unsigned int candidates[] = {0, ShiftMask, Mod5Mask, ShiftMask | Mod5Mask};
+  for (unsigned int extra : candidates) {
+    for (int kc = g_xkb->min_key_code; kc <= g_xkb->max_key_code; kc++) {
+      // Never a spare keycode the pool may rebind.
+      bool spare = false;
+      for (int i = 0; i < g_pool_count; i++) {
+        if (g_pool[i].keycode == kc) spare = true;
+      }
+      if (spare) continue;
+      unsigned int consumed = 0;
+      KeySym out = NoSymbol;
+      // Group in bits 13-14, as in a key event's state.
+      const unsigned int event_state = locked | extra | (state.group << 13);
+      if (!XkbTranslateKeyCode(g_xkb, static_cast<KeyCode>(kc), event_state, &consumed, &out)) {
+        continue;
+      }
+      if (out == sym) {
+        *key = static_cast<KeyCode>(kc);
+        *mods = extra;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// The first keycode whose first keysym is [sym] (a modifier key).
+KeyCode ModifierKey(KeySym sym) {
+  if (g_xkb == nullptr) return 0;
+  for (int kc = g_xkb->min_key_code; kc <= g_xkb->max_key_code; kc++) {
+    if (XkbKeycodeToKeysym(g_dpy, static_cast<KeyCode>(kc), 0, 0) == sym) {
+      return static_cast<KeyCode>(kc);
+    }
+  }
+  return 0;
+}
+
 KeySym KeysymFor(uint32_t cp) {
   if ((cp >= 0x20 && cp <= 0x7e) || (cp >= 0xa0 && cp <= 0xff)) return cp;
   return 0x01000000 | cp;
@@ -308,20 +379,42 @@ RI_EXPORT int32_t ri_x11_text(uint32_t codepoint) {
   std::lock_guard<std::mutex> lock(g_mutex);
   if (Open() != 0) return RI_FAILED;
   if (g_pool_count < 0) FindPool();
-  if (g_pool_count == 0) return RI_FAILED;
   const KeySym sym = KeysymFor(codepoint);
+  // With the layout first: no keymap change, so every client reads it right.
+  KeyCode key = 0;
+  unsigned int mods = 0;
+  if (FindInLayout(sym, &key, &mods)) {
+    const KeyCode shift = (mods & ShiftMask) ? ModifierKey(XK_Shift_L) : 0;
+    const KeyCode l3 = (mods & Mod5Mask) ? ModifierKey(XK_ISO_Level3_Shift) : 0;
+    if (((mods & ShiftMask) && shift == 0) || ((mods & Mod5Mask) && l3 == 0)) {
+      key = 0;
+    } else {
+      if (shift) XTestFakeKeyEvent(g_dpy, shift, True, CurrentTime);
+      if (l3) XTestFakeKeyEvent(g_dpy, l3, True, CurrentTime);
+      XTestFakeKeyEvent(g_dpy, key, True, CurrentTime);
+      XTestFakeKeyEvent(g_dpy, key, False, CurrentTime);
+      if (l3) XTestFakeKeyEvent(g_dpy, l3, False, CurrentTime);
+      if (shift) XTestFakeKeyEvent(g_dpy, shift, False, CurrentTime);
+      return Synced() ? RI_OK : RI_FAILED;
+    }
+  }
+  if (g_pool_count == 0) return RI_UNMAPPED;
+  const int64_t now = NowMs();
   PoolEntry* entry = nullptr;
   for (int i = 0; i < g_pool_count; i++) {
     if (g_pool[i].keysym == sym) entry = &g_pool[i];
   }
   if (entry == nullptr) {
-    entry = &g_pool[0];
+    // The least recently used keycode, if it's old enough to rebind.
+    PoolEntry* oldest = &g_pool[0];
     for (int i = 1; i < g_pool_count; i++) {
-      if (g_pool[i].used < entry->used) entry = &g_pool[i];
+      if (g_pool[i].used_ms < oldest->used_ms) oldest = &g_pool[i];
     }
-    if (!Bind(entry, sym)) return RI_FAILED;
+    if (oldest->keysym != NoSymbol && now - oldest->used_ms < kRebindAfterMs) return RI_UNMAPPED;
+    if (!Bind(oldest, sym)) return RI_FAILED;
+    entry = oldest;
   }
-  entry->used = ++g_pool_clock;
+  entry->used_ms = now;
   XTestFakeKeyEvent(g_dpy, static_cast<unsigned int>(entry->keycode), True, CurrentTime);
   XTestFakeKeyEvent(g_dpy, static_cast<unsigned int>(entry->keycode), False, CurrentTime);
   return Synced() ? RI_OK : RI_FAILED;
@@ -331,8 +424,9 @@ RI_EXPORT void ri_x11_text_restore(void) {
   std::lock_guard<std::mutex> lock(g_mutex);
   if (g_dpy == nullptr || g_pool_count <= 0) return;
   bool any = false;
+  const int64_t now = NowMs();
   for (int i = 0; i < g_pool_count; i++) {
-    if (g_pool[i].keysym == NoSymbol) continue;
+    if (g_pool[i].keysym == NoSymbol || now - g_pool[i].used_ms < kRebindAfterMs) continue;
     KeySym none[8] = {NoSymbol, NoSymbol, NoSymbol, NoSymbol,
                       NoSymbol, NoSymbol, NoSymbol, NoSymbol};
     int per = g_keysyms_per_keycode < 1 ? 1 : (g_keysyms_per_keycode > 8 ? 8 : g_keysyms_per_keycode);

@@ -190,15 +190,28 @@ void main() {
       });
     });
 
-    test('the spare keycodes are unbound a second after the last text', () {
+    test('the spare keycodes are unbound 1.5 s after the last text', () {
       fakeAsync((async) {
         injector.text('a');
         async.elapse(const Duration(milliseconds: 900));
         injector.text('b');
-        async.elapse(const Duration(milliseconds: 900));
+        async.elapse(const Duration(milliseconds: 1400));
         expect(native.named('restore'), isEmpty);
         async.elapse(const Duration(milliseconds: 200));
         expect(native.named('restore').length, 1);
+      });
+    });
+
+    test('a character with no free keycode is skipped and reported', () {
+      fakeAsync((async) {
+        native.textStatus = LinuxStatus.unmapped;
+        expect(injector.text('xy'), InjectResult.unmappedKey);
+        expect(native.named('text').length, 2);
+        native.textStatus = LinuxStatus.failed;
+        native.calls.clear();
+        expect(injector.text('xy'), InjectResult.failed);
+        expect(native.named('text').length, 1);
+        async.elapse(const Duration(seconds: 2));
       });
     });
   });

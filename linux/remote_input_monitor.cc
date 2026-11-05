@@ -22,6 +22,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -51,6 +52,10 @@ std::mutex g_thread_mutex;
 std::thread g_thread;
 std::atomic<bool> g_stop{false};
 std::atomic<bool> g_running{false};
+// Set once the thread has opened its sources and read the session, so
+// ri_activity_start answers with their health rather than a guess.
+std::atomic<bool> g_ready{false};
+constexpr int64_t kReadyTimeoutMs = 1000;
 std::atomic<int64_t> g_count{0};
 std::atomic<int64_t> g_reasons[RI_REASON_COUNT];
 std::atomic<int64_t> g_heartbeat_us{0};
@@ -355,6 +360,7 @@ void Run() {
   GDBusConnection* system = g_bus_get_sync(G_BUS_TYPE_SYSTEM, nullptr, nullptr);
   char* session_path = system != nullptr ? SessionPath(system) : nullptr;
   g_session_state.store(ReadSessionState(system, session_path));
+  g_ready.store(true);
 
   int64_t last_beat = NowUs();
   int64_t last_session = last_beat;
@@ -465,9 +471,14 @@ RI_EXPORT int32_t ri_activity_start(void) {
   if (!g_running.load()) {
     if (g_thread.joinable()) g_thread.join();
     g_stop.store(false);
+    g_ready.store(false);
     g_running.store(true);
     g_heartbeat_us.store(NowUs());
     g_thread = std::thread(Run);
+    const int64_t until = NowUs() + kReadyTimeoutMs * 1000;
+    while (!g_ready.load() && g_running.load() && NowUs() < until) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
   }
   return g_healthy.load() ? 1 : 0;
 }

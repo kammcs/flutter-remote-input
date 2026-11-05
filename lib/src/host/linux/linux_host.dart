@@ -228,15 +228,19 @@ int _evdevButton(PointerButton b) => switch (b) {
 ///   Buttons and the wheel move it there first.
 /// - Keys by evdev code (X keycode = code + 8). Repeats are dropped: the X
 ///   server repeats a held key itself.
-/// - Text binds each character to a spare keycode (a pool of 8, rebound
-///   least recently used first) and presses it, whatever the layout;
-///   line breaks and tabs press Enter and Tab. The spare keycodes are
-///   unbound [textRestoreDelay] after the last text.
+/// - Text: a character the keyboard layout has is typed with its key (and
+///   Shift or AltGr), under the current group and Caps Lock. Any other is
+///   bound to a spare keycode (one with no keysyms; never rebound within a
+///   second of its last use, since X clients read the keymap when they read
+///   the event, so a character that would need one sooner is skipped and
+///   reported as [InjectResult.unmappedKey]) and pressed. Line breaks and
+///   tabs press Enter and Tab. The spare keycodes are unbound
+///   [textRestoreDelay] after the last text.
 final class LinuxX11Injector implements InputInjector {
   /// Creates an injector over [native].
   LinuxX11Injector(
     this._native, {
-    this.textRestoreDelay = const Duration(seconds: 1),
+    this.textRestoreDelay = const Duration(milliseconds: 1500),
   });
 
   final LinuxNative _native;
@@ -309,8 +313,9 @@ final class LinuxX11Injector implements InputInjector {
 
   @override
   InjectResult text(String text) {
-    var r = InjectResult.injected;
+    var result = InjectResult.injected;
     for (final step in linuxTextSteps(text)) {
+      InjectResult r;
       if (step < 0) {
         r = _result(_native.x11Key(-step, down: true));
         if (r == InjectResult.injected) {
@@ -319,14 +324,21 @@ final class LinuxX11Injector implements InputInjector {
       } else {
         r = _result(_native.x11Text(step));
       }
-      if (r != InjectResult.injected) break;
+      if (r == InjectResult.unmappedKey) {
+        result = r;
+        continue;
+      }
+      if (r != InjectResult.injected) {
+        result = r;
+        break;
+      }
     }
     _restore?.cancel();
     _restore = Timer(textRestoreDelay, () {
       _restore = null;
       _native.x11TextRestore();
     });
-    return r;
+    return result;
   }
 }
 
