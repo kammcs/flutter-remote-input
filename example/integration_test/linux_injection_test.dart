@@ -220,6 +220,49 @@ Future<void> _inject(
   expect(probe.submitted, 1);
 }
 
+/// The host's own window is protected (HostOptions.protectHostWindows, on
+/// by default): a click on it is dropped and keys are blocked while it has
+/// focus. On Wayland the click is dropped once GTK knows the pointer is
+/// over it, so the pointer moves there first and waits.
+Future<void> _protectedChecks(
+  WidgetTester tester,
+  _Probe probe,
+  RemoteInputHost host,
+  SharedSurface surface,
+  HostOptions options,
+) async {
+  final pair = MemoryInputLink.pair();
+  final session = host.enable(
+    link: pair.host,
+    surface: surface,
+    options: options,
+  );
+  final viewer = RemoteInputViewer(link: pair.viewer);
+  try {
+    await viewer.stateChanges
+        .firstWhere((s) => s is SessionActive)
+        .timeout(const Duration(seconds: 5));
+    viewer.pointerMove(const Offset(0.5, 0.5));
+    await _settle(tester, 200);
+    probe.pointer.clear();
+    viewer.click(const Offset(0.5, 0.5));
+    await _settle(tester, 200);
+    expect(probe.pointer.whereType<PointerDownEvent>(), isEmpty);
+    expect(session.stats.dropped[DropReason.hostWindow], greaterThan(0));
+    final before = probe.text.text;
+    viewer
+      ..key(_keyA, KeyAction.down)
+      ..key(_keyA, KeyAction.up);
+    await _settle(tester, 200);
+    expect(probe.text.text, before);
+    expect(session.state, const SessionBlocked(BlockReason.hostAppInFront));
+    debugPrint('RIN protected: ${session.stats.dropped}');
+  } finally {
+    session.stop();
+    await viewer.close();
+  }
+}
+
 /// With RIN_LOCAL_INPUT=1: the presenter's Shift pauses the session, and
 /// unplugging that keyboard stops it.
 Future<void> _localInputChecks(
@@ -271,9 +314,16 @@ void main() {
       final size = view.physicalSize / view.devicePixelRatio;
       Offset at(Offset n) => Offset(n.dx * size.width, n.dy * size.height);
 
-      final pair = MemoryInputLink.pair();
       final host = RemoteInputHost();
       expect(host.checkAvailable(), isNull);
+      await _protectedChecks(
+        tester,
+        probe,
+        host,
+        SharedSurface.window(xid, contentInsets: insets),
+        const HostOptions(),
+      );
+      final pair = MemoryInputLink.pair();
       session = host.enable(
         link: pair.host,
         surface: SharedSurface.window(xid, contentInsets: insets),
@@ -373,6 +423,13 @@ void main() {
       expect(display.bounds.size, size);
       Offset at(Offset n) => Offset(n.dx * size.width, n.dy * size.height);
 
+      await _protectedChecks(
+        tester,
+        probe,
+        host,
+        SharedSurface.display(display.id),
+        const HostOptions(allowWayland: true),
+      );
       final pair = MemoryInputLink.pair();
       session = host.enable(
         link: pair.host,

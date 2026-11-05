@@ -642,14 +642,17 @@ final class LinuxWaylandSurfaceResolver implements SurfaceResolver {
   /// and [point] is where the package last put the pointer: a press or
   /// wheel there would reach the host app. A point elsewhere is let
   /// through, since where it lands can't be known before the pointer gets
-  /// there, so moves are never stuck. Unknown counts as yes.
+  /// there, so moves are never stuck. GTK's answer unknown counts as yes.
   @override
   bool isOwnWindowAt(Offset point) {
     final over = _native.wlPointerOverOwnWindow();
     if (over == null) return true;
     if (!over) return false;
+    // Before the package has put the pointer anywhere, where it is isn't
+    // known: let the event through, or a pointer resting on the host's
+    // window when the session starts would never move.
     final at = _target.pointer;
-    return at == null || (at - point).distance < 2;
+    return at != null && (at - point).distance < 2;
   }
 
   /// Whether one of this process's windows has focus. Unknown counts as

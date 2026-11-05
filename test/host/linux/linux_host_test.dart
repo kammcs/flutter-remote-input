@@ -415,6 +415,11 @@ void main() {
 
     test("own windows: only where the pointer already is", () {
       platform.surfaces.resolve(const SharedSurface.display(1));
+      // Before any move, the pointer's place isn't known: not blocked, so a
+      // pointer resting on the host's window can still be moved away.
+      native.wlPointerOver = true;
+      expect(platform.surfaces.isOwnWindowAt(const Offset(5, 5)), isFalse);
+      native.wlPointerOver = false;
       platform.injector.movePointer(const Offset(100, 100), heldButtons: {});
       expect(platform.surfaces.isOwnWindowAt(const Offset(100, 100)), isFalse);
       native.wlPointerOver = true;
