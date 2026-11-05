@@ -137,6 +137,11 @@ enum LocalInputSource {
   /// The monitor coming back after its hooks were out, so input in the gap
   /// went unseen.
   monitorGap,
+
+  /// Wayland: the desktop's idle time reset when the package hadn't posted
+  /// anything for 40 ms, so the input was someone else's (`docs/design.md`
+  /// §7.5). Which kind of input it was can't be told.
+  idleTime,
 }
 
 /// Why the host's local-input monitor reported local input, for

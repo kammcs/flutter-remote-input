@@ -17,7 +17,7 @@ import 'session.dart';
 /// (`docs/design.md` §6.1).
 ///
 /// ```dart
-/// if (!RemoteInputHost.isSupported) return; // web, phones, Linux
+/// if (!RemoteInputHost.isSupported) return; // web, phones
 /// final host = RemoteInputHost();
 /// final session = host.enable(
 ///   link: link, // the app's InputLink to the granted viewer
@@ -44,18 +44,23 @@ final class RemoteInputHost {
 
   static ControlSession? _live;
 
-  /// Whether this platform can inject input (Windows and macOS, once their
-  /// injectors land: roadmap M2 and M3).
+  /// Whether this platform can inject input: Windows, macOS, and Linux
+  /// with an X11 or Wayland session (and the plugin's native library).
   static bool get isSupported => defaultHostPlatform() != null;
 
   /// What a host on this device can't control, for the app's UI
-  /// (`docs/design.md` §7.4).
-  static List<HostLimitation> get limitations =>
-      HostLimitation.forPlatform(switch (defaultTargetPlatform) {
-        TargetPlatform.windows => PeerPlatform.windows,
-        TargetPlatform.macOS => PeerPlatform.macos,
-        _ => PeerPlatform.unknown,
-      }, isWeb: kIsWeb);
+  /// (`docs/design.md` §7.4). On Linux it depends on the session: X11 or
+  /// Wayland.
+  static List<HostLimitation> get limitations => HostLimitation.forPlatform(
+    switch (defaultTargetPlatform) {
+      TargetPlatform.windows => PeerPlatform.windows,
+      TargetPlatform.macOS => PeerPlatform.macos,
+      TargetPlatform.linux => PeerPlatform.linux,
+      _ => PeerPlatform.unknown,
+    },
+    isWeb: kIsWeb,
+    linuxWayland: !kIsWeb && isLinuxWaylandHost(),
+  );
 
   /// The live session in this process, if any.
   static ControlSession? get activeSession => _live;
@@ -76,7 +81,10 @@ final class RemoteInputHost {
   /// nothing else stops the host.
   HostUnavailableReason? checkAvailable({
     HostOptions options = const HostOptions(),
-  }) => _platform.checkAvailable(allowElevatedHost: options.allowElevatedHost);
+  }) => _platform.checkAvailable(
+    allowElevatedHost: options.allowElevatedHost,
+    allowWayland: options.allowWayland,
+  );
 
   /// The host's displays, for [SharedSurface.display].
   Future<List<DisplayInfo>> displays() => _platform.surfaces.displays();

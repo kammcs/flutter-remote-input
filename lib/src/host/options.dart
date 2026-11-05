@@ -323,6 +323,7 @@ final class HostOptions {
     this.limits,
     this.protectHostWindows = true,
     this.allowElevatedHost = false,
+    this.allowWayland = false,
   });
 
   /// When the session stops by itself, with `StopReason.expired`: a local
@@ -383,6 +384,21 @@ final class HostOptions {
   /// open Task Manager and run anything as administrator. With true, the
   /// viewer can drive apps at the host's level, as the presenter could;
   /// UAC prompts and the secure desktop stay out of reach
-  /// (`docs/design.md` §6.5). No effect on macOS.
+  /// (`docs/design.md` §6.5). On Linux, the host runs as root. No effect
+  /// on macOS.
   final bool allowElevatedHost;
+
+  /// Whether a session may start on a Wayland host (Linux). False by
+  /// default, and `RemoteInputHost.enable` throws
+  /// `HostUnavailableException(HostUnavailableReason.waylandNotAllowed)`.
+  ///
+  /// Wayland's safety controls have gaps the other platforms don't
+  /// (`docs/design.md` §7.5): the presenter's own input is seen only in
+  /// the viewer's pauses, the host app's own windows are only partly
+  /// protected from the pointer, window shares have no occlusion or
+  /// keyboard-focus checks, and text is limited to what the keyboard
+  /// layout can type. They're in `RemoteInputHost.limitations`
+  /// (`HostLimitation.isGap`), for the app's consent text. An app that
+  /// shows them passes true. No effect on X11, Windows or macOS.
+  final bool allowWayland;
 }

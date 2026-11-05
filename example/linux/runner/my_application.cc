@@ -5,6 +5,8 @@
 #include <gdk/gdkx.h>
 #endif
 
+#include <cstring>
+
 #include "flutter/generated_plugin_registrant.h"
 
 struct _MyApplication {
@@ -13,6 +15,62 @@ struct _MyApplication {
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
+
+// The injection test's window channel (integration_test/
+// linux_injection_test.dart): the window's X11 id and where the Flutter view
+// sits in it, and fullscreen for the Wayland test.
+static GtkWidget* g_view = nullptr;
+static FlMethodChannel* g_window_channel = nullptr;
+
+static void window_method_cb(FlMethodChannel* channel, FlMethodCall* call,
+                             gpointer user_data) {
+  GtkWindow* window = GTK_WINDOW(user_data);
+  const gchar* name = fl_method_call_get_name(call);
+  if (strcmp(name, "describe") == 0) {
+    g_autoptr(FlValue) result = fl_value_new_map();
+    GdkWindow* gdk_window = gtk_widget_get_window(GTK_WIDGET(window));
+#ifdef GDK_WINDOWING_X11
+    if (gdk_window != nullptr && GDK_IS_X11_WINDOW(gdk_window)) {
+      fl_value_set_string_take(
+          result, "xid",
+          fl_value_new_int(static_cast<int64_t>(
+              gdk_x11_window_get_xid(gdk_window))));
+    }
+#endif
+    gint x = 0, y = 0;
+    if (g_view != nullptr) {
+      gtk_widget_translate_coordinates(g_view, GTK_WIDGET(window), 0, 0, &x,
+                                       &y);
+    }
+    const int width = gdk_window != nullptr ? gdk_window_get_width(gdk_window) : 0;
+    const int height =
+        gdk_window != nullptr ? gdk_window_get_height(gdk_window) : 0;
+    const int view_width =
+        g_view != nullptr ? gtk_widget_get_allocated_width(g_view) : 0;
+    const int view_height =
+        g_view != nullptr ? gtk_widget_get_allocated_height(g_view) : 0;
+    fl_value_set_string_take(result, "insetLeft", fl_value_new_int(x));
+    fl_value_set_string_take(result, "insetTop", fl_value_new_int(y));
+    fl_value_set_string_take(result, "insetRight",
+                             fl_value_new_int(width - x - view_width));
+    fl_value_set_string_take(result, "insetBottom",
+                             fl_value_new_int(height - y - view_height));
+    fl_value_set_string_take(
+        result, "active", fl_value_new_bool(gtk_window_is_active(window)));
+    fl_method_call_respond_success(call, result, nullptr);
+  } else if (strcmp(name, "fullscreen") == 0) {
+    gtk_window_fullscreen(window);
+    fl_method_call_respond_success(call, nullptr, nullptr);
+  } else if (strcmp(name, "unfullscreen") == 0) {
+    gtk_window_unfullscreen(window);
+    fl_method_call_respond_success(call, nullptr, nullptr);
+  } else if (strcmp(name, "present") == 0) {
+    gtk_window_present(window);
+    fl_method_call_respond_success(call, nullptr, nullptr);
+  } else {
+    fl_method_call_respond_not_implemented(call, nullptr);
+  }
+}
 
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
@@ -74,6 +132,14 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+
+  g_view = GTK_WIDGET(view);
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  g_window_channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)),
+      "remote_input_example/window", FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(g_window_channel, window_method_cb,
+                                            window, nullptr);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }

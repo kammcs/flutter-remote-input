@@ -25,6 +25,7 @@ void main() {
 
   final windows = <int, (int, String)>{};
   final macos = <int, (int, String)>{};
+  final linux = <int, (int, String)>{};
   for (final MapEntry(key: name, value: entry) in data.entries) {
     final codes =
         (entry as Map<String, dynamic>)['scanCodes'] as Map<String, dynamic>;
@@ -34,6 +35,8 @@ void main() {
     if (win is int && win != 0) windows[usb] = (win, name);
     final mac = codes['macos'];
     if (mac is int) macos[usb] = (mac, name);
+    final evdev = codes['linux'];
+    if (evdev is int && evdev != 0) linux[usb] = (evdev, name);
   }
 
   String table(Map<int, (int, String)> m) {
@@ -68,12 +71,22 @@ void main() {
     ..writeln("/// (`CGKeyCode`, HIToolbox's `kVK_*`).")
     ..writeln('const Map<int, int> hidToMacKeyCode = {')
     ..writeln(table(macos))
+    ..writeln('};')
+    ..writeln()
+    ..writeln('/// USB HID usage (`page << 16 | id`) to Linux evdev key code')
+    ..writeln(
+      "/// (`linux/input-event-codes.h`'s `KEY_*`; an X11 keycode is this",
+    )
+    ..writeln('/// plus 8).')
+    ..writeln('const Map<int, int> hidToLinuxKeyCode = {')
+    ..writeln(table(linux))
     ..writeln('};');
   File('lib/src/keys/key_tables.g.dart')
     ..createSync(recursive: true)
     ..writeAsStringSync(out.toString());
   stdout.writeln(
-    'Wrote ${windows.length} Windows and ${macos.length} macOS keys '
+    'Wrote ${windows.length} Windows, ${macos.length} macOS and '
+    '${linux.length} Linux keys '
     '(Flutter $commit).',
   );
 }

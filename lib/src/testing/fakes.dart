@@ -339,7 +339,7 @@ final class FakeSurfaceResolver implements SurfaceResolver {
 }
 
 /// A [HostPlatform] made of fakes, for testing a host without injecting.
-final class FakeHostPlatform implements HostPlatform {
+final class FakeHostPlatform implements HostPlatform, HostRevocation {
   /// Creates a fake platform. Each part defaults to a new fake.
   FakeHostPlatform({
     this.platform = PeerPlatform.windows,
@@ -372,8 +372,21 @@ final class FakeHostPlatform implements HostPlatform {
   HostUnavailableReason? unavailable;
 
   @override
-  HostUnavailableReason? checkAvailable({bool allowElevatedHost = false}) =>
-      allowElevatedHost && unavailable == HostUnavailableReason.elevatedHost
-      ? null
-      : unavailable;
+  HostUnavailableReason? checkAvailable({
+    bool allowElevatedHost = false,
+    bool allowWayland = false,
+  }) => switch (unavailable) {
+    HostUnavailableReason.elevatedHost when allowElevatedHost => null,
+    HostUnavailableReason.waylandNotAllowed when allowWayland => null,
+    final u => u,
+  };
+
+  final StreamController<void> _revoked = StreamController.broadcast();
+
+  @override
+  Stream<void> get revoked => _revoked.stream;
+
+  /// Ends the permission to inject, as a closed Wayland portal session
+  /// does ([HostRevocation]).
+  void revoke() => _revoked.add(null);
 }

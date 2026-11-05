@@ -1,15 +1,15 @@
 # remote_input example
 
-The example app for [`remote_input`](../README.md): **any device controls a Windows or macOS desktop.** One app, three roles:
+The example app for [`remote_input`](../README.md): **any device controls a Windows, macOS or Linux desktop.** One app, three roles:
 
 | Role | Runs on | What it does |
 |---|---|---|
 | **One-machine demo** | Every platform, web and phones included | Host and viewer in one app over `MemoryInputLink.pair()`, with a drawn presenter's desktop. Click, drag, scroll and type in the viewer's view and watch it injected on the other side. Nothing is injected for real. **Start here.** |
 | **Control another computer** | Every platform | The viewer: connects to a host over the development WebSocket link and sends mouse, keyboard and touch input. |
-| **Host this computer** | Windows, macOS | The presenter: shows an address and a code, asks before anyone gets control, and replays the viewer's input on a display it shares. |
+| **Host this computer** | Windows, macOS, Linux (X11; Wayland, which asks in the system's dialog) | The presenter: shows an address and a code, asks before anyone gets control, and replays the viewer's input on a display it shares. |
 
 ```sh
-flutter run -d macos      # or windows; or chrome, linux, an Android or iOS device as a viewer
+flutter run -d macos      # or windows or linux; or chrome, an Android or iOS device as a viewer
 ```
 
 ## The one-machine demo
@@ -24,7 +24,7 @@ A real `RemoteInputHost` on a `FakeHostPlatform` from `package:remote_input/test
 
 **Development only.** The WebSocket link is plaintext `ws://`: anyone on the network can read what is typed. Use it on a network you trust. Real apps use an encrypted, authenticated transport, such as the call's WebRTC DataChannels ([below](#cloudflare_realtime)).
 
-1. On the computer to control (Windows or macOS), choose **Host this computer**, pick the display to share, and **Start listening** (TCP port 47800, every IPv4 interface). It shows its LAN addresses and a six-digit code.
+1. On the computer to control (Windows, macOS or Linux), choose **Host this computer**, pick the display to share, and **Start listening** (TCP port 47800, every IPv4 interface). It shows its LAN addresses and a six-digit code.
 2. On the other device, choose **Control another computer** and enter an address and the code.
 3. The host asks: **"A viewer wants to control this computer"**, with the name the viewer gave (not verified) and whether to allow the keyboard. Only on **Allow** does it call `host.enable(...)`, with a 30-minute expiry.
 4. While a viewer is in control, the host shows a banner with the state (paused while you use your own mouse, blocked reasons, why it stopped), **Stop** and **Pause**, the viewer's platform and counts. Closing the app stops control (`RemoteInputHost.stopAll()`).
@@ -36,6 +36,7 @@ Notes per viewer platform:
 - **Web:** serve the app over `http://` (`flutter run -d chrome`, or `flutter build web` behind a plain HTTP server). A page served over `https://` can't open a `ws://` socket.
 - **iOS:** allow the local-network prompt on first connect.
 - **macOS:** the app stays sandboxed; it has the network client and server entitlements.
+- **Linux host on Wayland:** **Host this computer** shows **Allow remote control**: **Ask** opens the system's Remote Desktop dialog, where you turn on "Allow Remote Interaction". It asks again for each session. The example opts in to Wayland (`HostOptions.allowWayland`) and lists its gaps with the other limitations. The injection test is `integration_test/linux_injection_test.dart` ([checkpoint C4](../docs/checkpoint.md)).
 
 **The viewer shows no video.** The example has no video stack, so the controlled view is a placeholder with the host display's aspect ratio, its size in pixels and a grid that maps onto it ([design.md §13](../docs/design.md#13-open-questions), question 14). Put the two machines side by side and watch the host's screen. A real app wraps its screen-share video in the capture widget instead.
 

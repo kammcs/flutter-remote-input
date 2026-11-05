@@ -70,8 +70,14 @@ class _HostPageState extends State<HostPage> {
     super.dispose();
   }
 
+  // The example shows RemoteInputHost.limitations, Wayland's gaps among
+  // them, so it opts in to Wayland (HostOptions.allowWayland).
+  static const _availability = HostOptions(allowWayland: true);
+
   void _checkAvailable() {
-    setState(() => _unavailable = _host?.checkAvailable());
+    setState(
+      () => _unavailable = _host?.checkAvailable(options: _availability),
+    );
     if (_unavailable == null && _displays == null) _loadDisplays();
   }
 
@@ -151,6 +157,7 @@ class _HostPageState extends State<HostPage> {
         link: connection.link,
         surface: SharedSurface.display(_displayId!),
         options: HostOptions(
+          allowWayland: true,
           expiresAt: expiresAt,
           allowKeyboard: answer.allowKeyboard,
           // The preset is meant for window shares; the example shares
@@ -306,7 +313,28 @@ class _HostPageState extends State<HostPage> {
         ),
         const SizedBox(height: 12),
       ],
-      if (_unavailable == HostUnavailableReason.permissionDenied) ...[
+      if (_unavailable == HostUnavailableReason.permissionDenied &&
+          defaultTargetPlatform == TargetPlatform.linux) ...[
+        // Wayland: the system's Remote Desktop dialog, for every session.
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.screen_share_outlined),
+            title: const Text('Allow remote control'),
+            subtitle: const Text(
+              'Wayland asks in its own dialog: turn on "Allow Remote '
+              'Interaction" there. It asks again for every session.',
+            ),
+            trailing: FilledButton(
+              onPressed: () async {
+                await RemoteInputPortal.start();
+                _checkAvailable();
+              },
+              child: const Text('Ask'),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+      ] else if (_unavailable == HostUnavailableReason.permissionDenied) ...[
         PermissionOnboarding(onCheckAgain: _checkAvailable),
         const SizedBox(height: 12),
       ] else if (_unavailable != null) ...[
@@ -324,6 +352,9 @@ class _HostPageState extends State<HostPage> {
                     'control administrator apps. Start it normally.',
               HostUnavailableReason.unsupportedPlatform =>
                 'This platform has no injector.',
+              HostUnavailableReason.waylandNotAllowed =>
+                'This is a Wayland session, and the example did not opt in '
+                    'to Wayland control.',
             }),
           ),
         ),

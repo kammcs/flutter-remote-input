@@ -210,7 +210,7 @@ The example shares whole displays. Run this with an app that shares one window, 
 
 ## C. Device checks for the host platforms
 
-The Windows and macOS hosts are built and unit-tested; these are the checks that need the real OS. Part A needs them to pass first.
+The Windows, macOS and Linux hosts are built and unit-tested; these are the checks that need the real OS. Part A needs them to pass first.
 
 ### C1. Windows
 
@@ -297,6 +297,16 @@ Preparation: open `example/macos/Runner.xcworkspace`; on the Runner target set y
 
 The answer goes into [design.md §7.3](design.md#73-macos), the README's macOS section, and to the first consumer.
 
+### C4. Linux (RIN-58; design §7.5)
+
+Only when the machine is free: the test moves the real pointer and types real keys, into its own window only (a window share of it on X11; fullscreen on Wayland, so the monitor's region is the window). Build packages: design §7.5.
+
+1. **X11:** `cd example && GDK_BACKEND=x11 REMOTE_INPUT_LINUX_BACKEND=x11 flutter test integration_test/linux_injection_test.dart -d linux`, hands off for about 15 seconds. On a real Xorg session the two variables aren't needed (the backend follows the session); under a Wayland session they run it through XWayland, which reaches XWayland windows only. Expect: corners and centre within a pixel in each axis, clicks, right click, double click, drag, pixel and line scrolling, `a`, Shift+`A`, Backspace, Ctrl+A, a burst of layout text, then `é`, `ö`, `—`, `👋` and `ñ` one at a time (spare keycodes), Enter; and **no pause** from the package's own XTest input. First, with `protectHostWindows` on, a click on the test window is dropped (`hostWindow`) and keys are blocked (`hostAppInFront`); on Wayland too.
+2. **Wayland:** the same command without the variables. When it prints `RIN_PORTAL_DIALOG`, the system's "Remote Desktop" dialog asks: turn on **Allow Remote Interaction** and press **Share**. Expect the same input (text from the layout only; an emoji is dropped and counted as `unmapped`), **no pause** from the package's own libei input (the idle-time subtraction), and the app's `RemoteInputPortal.close()` stopping a second control session with `permissionDenied`. With `RIN_SCREENCAST=1` a third test asks for a screen cast too (one dialog: interaction on, the screen, Share) and checks the stream, the PipeWire fd, and control through `PortalStream.surface`.
+3. **Local input wins and lost devices:** with `RIN_LOCAL_INPUT=1`, after `RIN_LOCAL_INPUT_READY` press Shift on a keyboard the host has (the session pauses), then unplug that keyboard (it stops with `localDeviceLost`). On the VM a uinput keyboard did it (a keyboard only: never a touchscreen or tablet).
+4. **The presenter's Stop (Wayland):** with `RIN_SHELL_STOP=1`, after `RIN_SHELL_STOP` press the stop button in GNOME's sharing indicator (top bar, right): the control session stops with `permissionDenied` at once.
+5. **By hand, still to do:** the real "Ubuntu on Xorg" session; **KDE Plasma** on Wayland (expect `localInputUnmonitored` until KDE's idle time is read: design §7.5) and on X11; a real keyboard's and mouse's local input on both, timed against the 50 ms target; a Bluetooth keyboard or mouse switched off (`localDeviceLost`); a window share on Wayland (pick a window in the dialog, give `RemoteInputPortal.updateContentSize` the window's size, and check the corners); HiDPI and two monitors; a German or French layout's text on both backends; the lock screen (`blocked(sessionInactive)`); a polkit prompt (a gap: record what the viewer can do).
+
 ## Results
 
 Fill in one row per run. Result: pass, fail, or n/a with a reason.
@@ -330,6 +340,14 @@ Fill in one row per run. Result: pass, fail, or n/a with a reason.
 | C2.14 Window opening over the share (RIN-56) | → macOS (window share) | | | | | expected: no press reaches the new window; record the `occluded` count |
 | C3.6 Lost devices, sandboxed | macOS | | | | | expected: `stopped(localDeviceLost)`, no Input Monitoring prompt |
 | C3.7 Counter health, sandboxed | macOS | | | | | expected: own mouse pauses (healthy); a warp blocks (fails closed) |
+| C4.1 X11 injection test | → Linux (XWayland, GNOME 46, VM) | `RIN-58-linux-presenter` | 2026-11-05 | — | pass | Every step; 52 events injected, no pause from XTest input. Text: layout keys in a burst; others through spare keycodes one at a time (in a burst, Flutter's Linux embedder reorders them: design §7.5) |
+| C4.2 Wayland injection test | → Linux (GNOME 46 Wayland, VM) | `RIN-58-linux-presenter` | 2026-11-05 | — | pass | Portal v2 dialog, libei, every step; no pause from libei input; emoji dropped as `unmapped`; app close: `permissionDenied` |
+| C4.2 Screen cast and control, one dialog | → Linux (GNOME 46 Wayland, VM) | `RIN-58-linux-presenter` | 2026-11-05 | — | pass | Monitor stream, node and fd, region matched by mapping id; move and click within a pixel |
+| C4.3 Local input and a lost keyboard | → Linux (XWayland and Wayland, VM) | `RIN-58-linux-presenter` | 2026-11-05 | — | pass | A uinput keyboard's Shift paused the session (X11: XInput 2; Wayland: idle time); its removal stopped it (`localDeviceLost`) |
+| C4.4 The presenter's Stop in GNOME's indicator | → Linux (GNOME 46 Wayland, VM) | `RIN-58-linux-presenter` | 2026-11-05 | — | pass | `permissionDenied` at once; EIS disconnected before the portal's `Closed` |
+| C4.5 Real Xorg session | → Linux | | | | | for the owner |
+| C4.5 KDE Plasma, Wayland and X11 | → Linux | | | | | for the owner; Wayland expected `localInputUnmonitored` (no KDE idle time yet) |
+| C4.5 Physical input timing, Bluetooth off, layouts, HiDPI, two monitors, lock screen, polkit | → Linux | | | | | for the owner |
 | A1 Pointer | Windows → macOS | | | | | |
 | A1 Pointer | macOS → Windows | | | | | |
 | A2 Keys | Windows → macOS | | | | | |
