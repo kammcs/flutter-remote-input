@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This repo is **`remote_input`**, a Flutter plugin for remote keyboard and mouse control. A viewer's input is captured over a remote view, sent as a small versioned protocol over a transport the app provides, and replayed as local input on the presenter's desktop: `SendInput` on Windows, `CGEventPost` on macOS. It is **public** and will be published to pub.dev. Its first consumer is the buildIt.Social app, which is private and developed separately ([Related projects](#related-projects)).
+This repo is **`remote_input`**, a Flutter plugin for remote keyboard and mouse control. A viewer's input is captured over a remote view, sent as a small versioned protocol over a transport the app provides, and replayed as local input on the presenter's desktop: `SendInput` on Windows, `CGEventPost` on macOS, XTest or the Wayland RemoteDesktop portal with libei on Linux. It is **public** and will be published to pub.dev. Its first consumer is the buildIt.Social app, which is private and developed separately ([Related projects](#related-projects)).
 
 The package injects input into someone's computer. **Safety is part of the API, not an add-on:** injection is off by default, stops instantly, and yields to the local user. Read [docs/design.md §6](docs/design.md#6-safety-primitives) before changing anything that injects.
 

@@ -123,7 +123,9 @@ enum HostLimitation {
   final bool isGap;
 
   /// What a host on [platform] can't control. Browsers report the OS they
-  /// run on, so pass `isWeb` for them.
+  /// run on, so pass `isWeb` for them. On Linux, pass [linuxWayland] for a
+  /// Wayland host, which adds the portal's consent, layout-limited text and
+  /// Wayland's gaps.
   static List<HostLimitation> forPlatform(
     PeerPlatform platform, {
     bool isWeb = false,

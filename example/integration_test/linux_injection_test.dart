@@ -43,6 +43,7 @@ const _backspace = 0x0007002A;
 
 bool get _x11 => Platform.environment['REMOTE_INPUT_LINUX_BACKEND'] == 'x11';
 bool get _localInput => Platform.environment['RIN_LOCAL_INPUT'] == '1';
+bool get _screenCast => Platform.environment['RIN_SCREENCAST'] == '1';
 
 /// What the test window received.
 final class _Probe {
@@ -405,17 +406,44 @@ void main() {
 
       await _localInputChecks(tester, session);
 
-      if (session.state is! SessionStopped) {
-        // Closing the portal session stops control at once.
-        await RemoteInputPortal.close();
-        await _settle(tester, 300);
-        expect(
-          session.state,
-          const SessionStopped(StopReason.permissionDenied),
-        );
+      // The revoke: a new control session on the same portal session, then
+      // the portal session ends. With RIN_SHELL_STOP=1 the person (or a
+      // script) presses Stop in GNOME's sharing indicator after
+      // RIN_SHELL_STOP; otherwise the app closes it.
+      session.stop();
+      final shellStop = Platform.environment['RIN_SHELL_STOP'] == '1';
+      final closed = RemoteInputPortal.closed.first;
+      final pair2 = MemoryInputLink.pair();
+      final second = host.enable(
+        link: pair2.host,
+        surface: SharedSurface.display(display.id),
+        options: options,
+      );
+      final viewer2 = RemoteInputViewer(link: pair2.viewer);
+      await viewer2.stateChanges
+          .firstWhere((s) => s is SessionActive)
+          .timeout(const Duration(seconds: 5));
+      if (shellStop) {
+        // Out of fullscreen, so the top bar and its indicator show.
+        await _window.invokeMethod<void>('unfullscreen');
+        await _settle(tester, 1000);
+        debugPrint('RIN_SHELL_STOP');
       } else {
         await RemoteInputPortal.close();
       }
+      final reason = await closed.timeout(const Duration(seconds: 60));
+      await _settle(tester, 100);
+      // GNOME's Stop ends EIS as well as the portal session; whichever is
+      // heard first is the reason.
+      expect(
+        reason,
+        shellStop
+            ? isIn([PortalCloseReason.closed, PortalCloseReason.disconnected])
+            : PortalCloseReason.closedByApp,
+      );
+      expect(second.state, const SessionStopped(StopReason.permissionDenied));
+      debugPrint('RIN_REVOKED ${reason.name}');
+      await viewer2.close();
       expect(
         await RemoteInputPermissions.status(),
         RemoteInputPermissionStatus.denied,
@@ -435,4 +463,78 @@ void main() {
       binding.shouldPropagateDevicePointerEvents = false;
     }
   }, skip: !Platform.isLinux || _x11);
+
+  // With RIN_SCREENCAST=1: one dialog for the share and the control. Share
+  // the screen with "Allow Remote Interaction" on when the test prints
+  // RIN_PORTAL_DIALOG_SCREENCAST.
+  testWidgets('Wayland: one dialog for a screen cast and control', (
+    tester,
+  ) async {
+    binding.shouldPropagateDevicePointerEvents = true;
+    final probe = _Probe();
+    ControlSession? session;
+    RemoteInputViewer? viewer;
+    try {
+      await tester.pumpWidget(_app(probe));
+      await _settle(tester, 500);
+      await _window.invokeMethod<void>('fullscreen');
+      await _settle(tester, 1500);
+      expect((await _describe())['active'], isTrue);
+      debugPrint('RIN_PORTAL_DIALOG_SCREENCAST');
+      final started = await RemoteInputPortal.start(screenCast: true);
+      expect(started.status, PortalStartStatus.ok, reason: started.message);
+      expect(started.pipewireFd, greaterThanOrEqualTo(0));
+      final stream = started.streams.single;
+      debugPrint(
+        'RIN stream: $stream, size ${stream.size}, '
+        'position ${stream.position}, scale ${stream.scale}',
+      );
+      expect(stream.sourceType, PortalSourceType.monitor);
+      expect(stream.displayId, isNot(0));
+      expect(RemoteInputPortal.streams, started.streams);
+      await _settle(tester, 1000);
+      expect((await _describe())['active'], isTrue);
+
+      final view = tester.view;
+      final size = view.physicalSize / view.devicePixelRatio;
+      Offset at(Offset n) => Offset(n.dx * size.width, n.dy * size.height);
+      final pair = MemoryInputLink.pair();
+      session = RemoteInputHost().enable(
+        link: pair.host,
+        surface: stream.surface,
+        options: const HostOptions(
+          allowWayland: true,
+          protectHostWindows: false,
+        ),
+      );
+      viewer = RemoteInputViewer(link: pair.viewer);
+      await viewer.stateChanges
+          .firstWhere((s) => s is SessionActive)
+          .timeout(const Duration(seconds: 5));
+      viewer.pointerMove(const Offset(0.3, 0.4));
+      await _settle(tester);
+      expect(
+        (probe.last<PointerHoverEvent>().position - at(const Offset(0.3, 0.4)))
+            .distance,
+        lessThanOrEqualTo(1.0),
+      );
+      probe.pointer.clear();
+      viewer.click(const Offset(0.6, 0.5));
+      await _settle(tester);
+      expect(
+        (probe.last<PointerDownEvent>().position - at(const Offset(0.6, 0.5)))
+            .distance,
+        lessThanOrEqualTo(1.0),
+      );
+      await RemoteInputPortal.close();
+      await _settle(tester, 300);
+      expect(session.state, const SessionStopped(StopReason.permissionDenied));
+      expect(RemoteInputPortal.streams, isEmpty);
+    } finally {
+      session?.stop();
+      await viewer?.close();
+      await RemoteInputPortal.close();
+      binding.shouldPropagateDevicePointerEvents = false;
+    }
+  }, skip: !Platform.isLinux || _x11 || !_screenCast);
 }

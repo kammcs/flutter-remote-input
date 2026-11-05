@@ -61,6 +61,9 @@ static void window_method_cb(FlMethodChannel* channel, FlMethodCall* call,
   } else if (strcmp(name, "fullscreen") == 0) {
     gtk_window_fullscreen(window);
     fl_method_call_respond_success(call, nullptr, nullptr);
+  } else if (strcmp(name, "unfullscreen") == 0) {
+    gtk_window_unfullscreen(window);
+    fl_method_call_respond_success(call, nullptr, nullptr);
   } else if (strcmp(name, "present") == 0) {
     gtk_window_present(window);
     fl_method_call_respond_success(call, nullptr, nullptr);

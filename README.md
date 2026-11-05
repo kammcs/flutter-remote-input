@@ -2,7 +2,7 @@
 
 Remote keyboard and mouse control for Flutter apps. A **viewer** watching someone's shared screen (through any video package) can move the pointer, click, scroll and type, and the **presenter's** app replays that input on their own desktop.
 
-**Any device can be the viewer:** a phone, a tablet, a browser or a desktop. **Windows and macOS desktops can be controlled.**
+**Any device can be the viewer:** a phone, a tablet, a browser or a desktop. **Windows, macOS and Linux desktops can be controlled** (Linux on X11, and on Wayland with an opt-in for its gaps).
 
 > **Pre-release, feature complete in code, device checks under way.** Everything in the design is built and unit-tested: the protocol, the safety core, injection on Windows and macOS, the capture widget and the example. A Windows host has been controlled from a Mac viewer on a real machine, with local input wins working; nothing has run with a Mac as host yet, and the viewer's keyboard handling hasn't been tried on real browsers and phones. [docs/checkpoint.md](docs/checkpoint.md) lists the checks and their results. The package isn't on pub.dev (`publish_to: none`), and the API may still change.
 
@@ -11,7 +11,7 @@ Remote keyboard and mouse control for Flutter apps. A **viewer** watching someon
 ## What it does
 
 - **A versioned wire protocol** that works over any transport you give it: two message channels, one reliable and one unreliable. WebRTC DataChannels fit; so does a WebSocket. Coordinates are normalized to the shared screen or window, so desktop coordinates never travel.
-- **Injection on the presenter's machine:** `SendInput` on Windows (per-monitor DPI, several monitors, a shared window or monitor) and `CGEventPost` on macOS (with Accessibility permission checks and onboarding helpers).
+- **Injection on the presenter's machine:** `SendInput` on Windows (per-monitor DPI, several monitors, a shared window or monitor), `CGEventPost` on macOS (with Accessibility permission checks and onboarding helpers), and on Linux XTest on X11 or the RemoteDesktop portal with libei on Wayland.
 - **Capture on the viewer's side:** `RemoteInputCapture` wraps your remote video view and turns mouse, trackpad, touch and keyboard input (dead keys, IMEs and soft keyboards included) into protocol messages. On phones a **trackpad mode** with its own cursor makes small targets reachable, pinch zooms the local view, and `RemoteKeyBar` adds the keys a soft keyboard lacks.
 - **Safety primitives** for your consent experience.
 
@@ -19,10 +19,10 @@ Remote keyboard and mouse control for Flutter apps. A **viewer** watching someon
 
 | | Windows | macOS | Linux | Web | iOS | Android |
 |---|---|---|---|---|---|---|
-| Presenter (is controlled) | Yes, 10 1703+ | Yes, 12+ | Not planned | No | No | Not planned |
+| Presenter (is controlled) | Yes, 10 1703+ | Yes, 12+ | Yes: X11; Wayland opt-in | No | No | Not planned |
 | Viewer (controls) | Yes | Yes | Yes | Yes | Yes | Yes |
 
-Browsers and iOS can't inject input into the operating system. Linux under Wayland and Android have no general way to do it that fits a generic package. [The design](docs/design.md#22-platforms) explains each one.
+Browsers and iOS can't inject input into the operating system, and Android has no general way to do it that fits a generic package. [The design](docs/design.md#22-platforms) explains each one.
 
 ## Using it
 
@@ -71,6 +71,32 @@ if (status == RemoteInputPermissionStatus.denied) {
 - Managed Macs can pre-approve the permission with an MDM privacy-preferences (PPPC) profile.
 - **The App Sandbox:** nothing in the host needs a sandbox exception, and Apple has said `CGEventPost` works sandboxed once the permission is granted. The device test that confirms it is pending ([checkpoint.md C3](docs/checkpoint.md)).
 - Password fields (Secure Event Input), the login window and the lock screen can't be controlled; the session reports `blocked` until they're gone.
+
+### Linux
+
+**X11** needs nothing from the presenter: XTest injects, and XInput 2 tells their own input from the package's. **Wayland** has gaps the other platforms don't, so it's **opt-in**: pass `HostOptions(allowWayland: true)` (to `enable` and `checkAvailable`), or `checkAvailable()` reports `waylandNotAllowed`. The gaps are in `RemoteInputHost.limitations` (`isGap`); put them in your consent text:
+
+- the presenter's own mouse and keyboard pause control only in the viewer's pauses (Wayland lets no app see other input, so the package reads GNOME's idle time);
+- your app's own windows are protected from the pointer only once GTK knows the pointer is over them;
+- on a window share there's no check for windows over the shared one, nor for which window has keyboard focus;
+- text is limited to what the presenter's keyboard layout can type.
+
+On Wayland, injection goes through a **RemoteDesktop portal session**, and the system asks the presenter in its own dialog every time:
+
+```dart
+// Control only (or RemoteInputPermissions.request(), which does this):
+final r = await RemoteInputPortal.start();
+// Or share and control with one dialog:
+final r = await RemoteInputPortal.start(screenCast: true);
+if (r.isOk) {
+  final stream = r.streams.single;   // hand r.pipewireFd and stream.nodeId to your capturer
+  RemoteInputHost().enable(link: link, surface: stream.surface,
+      options: const HostOptions(allowWayland: true));
+}
+RemoteInputPortal.closed.listen(endTheShare); // the presenter pressed Stop in the system's indicator
+```
+
+When the portal session ends (the presenter's Stop, or your `RemoteInputPortal.close()`), a live control session stops at once with `permissionDenied`. Close it yourself when you end a share made from it, so the system's indicator goes away. GNOME 46 is checked; KDE Plasma isn't yet, and there local input can't be read, so sessions stay blocked. Root is refused, as an elevated Windows host is. Build packages and details: [design §7.5](docs/design.md#75-linux-rin-58).
 
 ### Windows
 
