@@ -208,6 +208,26 @@ void main() {
     await h.finish(tester);
   });
 
+  testWidgets("a Linux viewer's notch is the wire's notch (BIS-636)", (
+    tester,
+  ) async {
+    final h = Harness(viewerPlatform: PeerPlatform.linux);
+    await h.start(tester, capture);
+    const p = Offset(400, 300);
+    final pointer = TestPointer(1, PointerDeviceKind.mouse);
+    await tester.sendEventToBinding(pointer.hover(p));
+    // Flutter's Linux embedder gives a notch as 53 logical pixels.
+    await tester.sendEventToBinding(pointer.scroll(const Offset(0, 53)));
+    await h.settle(tester);
+    await tester.sendEventToBinding(pointer.scroll(const Offset(0, -53)));
+    await h.settle(tester);
+    expect(h.events.whereType<InjectedWheel>().toList(), [
+      InjectedWheel(at(p), dx: 0, dy: 100, unit: WheelUnit.pixel),
+      InjectedWheel(at(p), dx: 0, dy: -100, unit: WheelUnit.pixel),
+    ]);
+    await h.finish(tester);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
   testWidgets('the wheel keeps scrolling when the wall clock goes back '
       '(RIN-18)', (tester) async {
     final h = Harness();

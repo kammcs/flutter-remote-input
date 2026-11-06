@@ -890,6 +890,23 @@ final class ControlSession {
         _releaseKey(held);
       }
     }
+    // A Linux host's session keys (Ctrl+Alt+F1…F12, Ctrl+Alt+Backspace)
+    // go with them, presses and repeats; a release still lets go of a key
+    // held from before the modifiers.
+    if (!options.allowSystemKeys &&
+        m.action != KeyAction.up &&
+        KeyFilters.isLinuxSessionKey(
+          KeyPress(
+            usage: usage,
+            heldModifiers: Set.unmodifiable(
+              _heldKeys.where((k) => k != usage && HidModifier.isModifier(k)),
+            ),
+            modifiers: modifiers,
+            hostPlatform: _platform.platform,
+          ),
+        )) {
+      return _drop(DropReason.systemKey);
+    }
     final held = _heldKeys.contains(usage);
     if (m.action == KeyAction.up) {
       if (!held) return _drop(DropReason.notHeld);

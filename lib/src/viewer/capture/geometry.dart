@@ -5,6 +5,7 @@ library;
 import 'dart:math' as math;
 import 'dart:ui' show Offset, Rect, Size;
 
+import 'package:flutter/foundation.dart' show TargetPlatform;
 import 'package:flutter/painting.dart' show Alignment, BoxFit, applyBoxFit;
 
 /// The rect, in a box of [viewport] size, that a picture of [content] size
@@ -95,3 +96,27 @@ bool isInsideUnit(Offset point) =>
 /// Normalized [point] clamped onto the picture.
 Offset clampToUnit(Offset point) =>
     Offset(point.dx.clamp(0.0, 1.0), point.dy.clamp(0.0, 1.0));
+
+/// The wire's pixels to a wheel notch: three lines, as Windows' default and
+/// Chromium's 100 pixels (`docs/design.md` §8). Flutter's Windows embedder
+/// gives this (3 lines × 100 / 3).
+const double wirePixelsPerNotch = 100;
+
+/// What Flutter's Linux embedder gives a wheel notch, in logical pixels:
+/// one GDK scroll step times 53 (`kScrollOffsetMultiplier`, taken from
+/// Chromium's X11 code), for discrete and smooth wheels alike. Touchpads
+/// arrive as pans instead.
+const double linuxPixelsPerNotch = 53;
+
+/// A scroll signal's [delta] as wire pixels on a viewer running on
+/// [platform] (not [web]): Linux's 53 pixels a notch become the wire's
+/// 100, so a notch on a Linux viewer scrolls the host a notch, not half of
+/// one. Unchanged elsewhere.
+Offset wheelDeltaToWire(
+  Offset delta,
+  TargetPlatform platform, {
+  bool web = false,
+}) {
+  if (web || platform != TargetPlatform.linux) return delta;
+  return delta * (wirePixelsPerNotch / linuxPixelsPerNotch);
+}

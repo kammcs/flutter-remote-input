@@ -18,11 +18,13 @@ enum KeyboardMode {
   /// shortcuts work. Modifier keys are sent physically; Caps Lock and Num
   /// Lock aren't sent, because the text carries the case.
   ///
-  /// On Windows and Linux viewers (desktop or browser), AltGr characters (a
-  /// character typed with Ctrl and Alt both held, as Windows reports AltGr)
-  /// go by text, so `@` on a German keyboard arrives as `@` whatever the
-  /// host's layout. Elsewhere Ctrl+Alt (Ctrl+Option on a Mac) is a shortcut
-  /// and goes physically.
+  /// AltGr characters go by text, so `@` on a German keyboard arrives as
+  /// `@` whatever the host's layout. On Windows viewers (desktop or
+  /// browser), which report AltGr as Ctrl and Alt both held, a character
+  /// typed with Ctrl+Alt is one. On Linux, AltGr is a key of its own (its
+  /// logical key is AltGraph): it isn't sent, and the characters it types
+  /// arrive with no modifier. Everywhere but Windows, Ctrl+Alt (Ctrl+Option
+  /// on a Mac) with a key is a shortcut and goes physically.
   auto,
 
   /// Every key by position, lock keys included, and no text input. For
@@ -186,12 +188,29 @@ bool isPrintableCharacter(String? character) {
 }
 
 /// Whether a character typed with Ctrl and Alt held on [platform] is an
-/// AltGr character: on Windows, which reports AltGr as Ctrl+Alt, and on
-/// Linux, whose layouts follow it (in a browser, [platform] is the OS the
-/// browser runs on). On Apple platforms and Android, Ctrl+Alt is a
-/// shortcut.
+/// AltGr character: only on Windows, which reports AltGr as Ctrl+Alt (in a
+/// browser, [platform] is the OS the browser runs on). Linux reports AltGr
+/// as a key of its own, ISO_Level3_Shift, whose logical key is AltGraph
+/// ([isLayoutShiftKey]), so there Ctrl+Alt with a key is a shortcut
+/// (Ctrl+Alt+T, Ctrl+Alt+Delete), as on Apple platforms and Android.
 bool ctrlAltIsAltGr(TargetPlatform platform) =>
-    platform == TargetPlatform.windows || platform == TargetPlatform.linux;
+    platform == TargetPlatform.windows;
+
+/// Flutter's logical key id for AltGraph (`LogicalKeyboardKey.altGraph`).
+const int _logicalAltGraph = 0x00100000103;
+
+/// Flutter's logical key id for ModeChange (`LogicalKeyboardKey.modeChange`),
+/// X11's Mode_switch.
+const int _logicalModeChange = 0x0010000070B;
+
+/// Whether the key with logical id [logicalKeyId] only shifts the viewer's
+/// own layout to another level: AltGr as Linux reports it (ISO_Level3_Shift,
+/// AltGraph; also a browser's `AltGraph`) and X11's Mode_switch. Outside
+/// `physical` mode such a key isn't sent: the characters typed with it go
+/// by text, and on a host its press alone would be a lone Alt (on Windows,
+/// a tap of Alt opens the menu bar, which then takes the text).
+bool isLayoutShiftKey(int logicalKeyId) =>
+    logicalKeyId == _logicalAltGraph || logicalKeyId == _logicalModeChange;
 
 /// Routes a key press (a down or repeat event) in [mode].
 ///
@@ -201,7 +220,8 @@ bool ctrlAltIsAltGr(TargetPlatform platform) =>
 /// platform says an IME is handling the key (the web's `Process` key):
 /// then every key belongs to the IME. [altGr] says whether a printable
 /// character typed with Ctrl and Alt is an AltGr character, which goes by
-/// text ([ctrlAltIsAltGr]).
+/// text ([ctrlAltIsAltGr]). [layoutShift] says the key only shifts the
+/// viewer's layout ([isLayoutShiftKey]): it stays with the platform.
 KeyRoute routeKeyDown({
   required KeyboardMode mode,
   required int usage,
@@ -210,9 +230,11 @@ KeyRoute routeKeyDown({
   bool composing = false,
   bool processKey = false,
   bool altGr = true,
+  bool layoutShift = false,
 }) {
   if (mode == KeyboardMode.physical) return KeyRoute.physical;
   if (composing || processKey) return KeyRoute.platform;
+  if (layoutShift) return KeyRoute.platform;
   if (HidModifier.isModifier(usage)) return KeyRoute.physical;
   if (isLockKey(usage) || isImeKey(usage)) return KeyRoute.platform;
   if (!isPrintablePosition(usage)) return KeyRoute.physical;

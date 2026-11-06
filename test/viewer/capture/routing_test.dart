@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:remote_input/remote_input.dart';
 import 'package:remote_input/src/viewer/capture/geometry.dart';
@@ -94,8 +95,10 @@ void main() {
 
     test('Ctrl+Alt is AltGr only where the platform means it', () {
       expect(ctrlAltIsAltGr(TargetPlatform.windows), isTrue);
-      expect(ctrlAltIsAltGr(TargetPlatform.linux), isTrue);
+      // Linux reports AltGr as AltGraph, so Ctrl+Alt+T is a shortcut there
+      // (BIS-636).
       for (final p in [
+        TargetPlatform.linux,
         TargetPlatform.macOS,
         TargetPlatform.iOS,
         TargetPlatform.android,
@@ -115,6 +118,55 @@ void main() {
           KeyRoute.physical,
         );
       }
+    });
+
+    test("Linux's AltGr stays with the platform outside physical mode", () {
+      expect(isLayoutShiftKey(LogicalKeyboardKey.altGraph.keyId), isTrue);
+      expect(isLayoutShiftKey(LogicalKeyboardKey.modeChange.keyId), isTrue);
+      for (final k in [
+        LogicalKeyboardKey.altRight,
+        LogicalKeyboardKey.altLeft,
+        LogicalKeyboardKey.controlLeft,
+        LogicalKeyboardKey.keyQ,
+      ]) {
+        expect(isLayoutShiftKey(k.keyId), isFalse, reason: k.debugName);
+      }
+      for (final mode in [KeyboardMode.auto, KeyboardMode.text]) {
+        expect(
+          routeKeyDown(
+            mode: mode,
+            usage: HidModifier.altRight,
+            character: null,
+            modifiers: 0,
+            layoutShift: true,
+          ),
+          KeyRoute.platform,
+        );
+      }
+      // By position, the host's layout decides: AltGr is Right Alt there.
+      expect(
+        routeKeyDown(
+          mode: KeyboardMode.physical,
+          usage: HidModifier.altRight,
+          character: null,
+          modifiers: 0,
+          layoutShift: true,
+        ),
+        KeyRoute.physical,
+      );
+      // The characters it types carry no modifier, so they go by text,
+      // and Ctrl+Alt+T is a shortcut.
+      expect(_route(auto, _q, character: '@', altGr: false), KeyRoute.text);
+      expect(
+        _route(
+          auto,
+          0x00070017,
+          character: 't',
+          modifiers: KeyModifiers.control | KeyModifiers.alt,
+          altGr: false,
+        ),
+        KeyRoute.physical,
+      );
     });
 
     test('dead keys and IMEs stay with the platform', () {
@@ -181,6 +233,31 @@ void main() {
     expect(usKeyForCharacter('/'), (0x00070038, false));
     expect(usKeyForCharacter('?'), (0x00070038, true));
     expect(usKeyForCharacter('é'), isNull);
+  });
+
+  test("wheelDeltaToWire: a Linux notch is the wire's notch (BIS-636)", () {
+    // Flutter's Linux embedder: 53 logical pixels a notch.
+    expect(
+      wheelDeltaToWire(const Offset(0, 53), TargetPlatform.linux),
+      offsetMoreOrLessEquals(const Offset(0, 100)),
+    );
+    expect(
+      wheelDeltaToWire(const Offset(-26.5, -5.3), TargetPlatform.linux),
+      offsetMoreOrLessEquals(const Offset(-50, -10)),
+    );
+    for (final p in [
+      TargetPlatform.windows,
+      TargetPlatform.macOS,
+      TargetPlatform.android,
+      TargetPlatform.iOS,
+    ]) {
+      expect(wheelDeltaToWire(const Offset(0, 120), p), const Offset(0, 120));
+    }
+    // A browser on Linux has its own units.
+    expect(
+      wheelDeltaToWire(const Offset(0, 53), TargetPlatform.linux, web: true),
+      const Offset(0, 53),
+    );
   });
 
   group('contentRectFor', () {

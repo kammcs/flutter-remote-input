@@ -190,6 +190,157 @@ void main() {
     });
   });
 
+  group("a Linux host's session keys (BIS-636)", () {
+    const backspace = 0x0007002A;
+    const f1 = 0x0007003A;
+    const f12 = 0x00070045;
+    const keyT = 0x00070017;
+
+    Rig linuxHost(
+      FakeAsync async, {
+      PeerPlatform viewer = PeerPlatform.windows,
+      HostOptions options = const HostOptions(),
+    }) => Rig(
+      async,
+      platform: FakeHostPlatform(platform: PeerPlatform.linux),
+      viewerPlatform: viewer,
+      options: options,
+    );
+
+    test('isLinuxSessionKey: Ctrl+Alt with F1-F12 or Backspace, on Linux', () {
+      KeyPress press(int usage, int modifiers, PeerPlatform host) => KeyPress(
+        usage: usage,
+        heldModifiers: const {},
+        modifiers: modifiers,
+        hostPlatform: host,
+      );
+      const ctrlAlt = KeyModifiers.control | KeyModifiers.alt;
+      for (final k in [f1, f3, f12, backspace]) {
+        expect(
+          KeyFilters.isLinuxSessionKey(press(k, ctrlAlt, PeerPlatform.linux)),
+          isTrue,
+          reason: k.toRadixString(16),
+        );
+        expect(
+          KeyFilters.isLinuxSessionKey(
+            press(k, ctrlAlt | KeyModifiers.shift, PeerPlatform.linux),
+          ),
+          isTrue,
+        );
+        for (final m in [KeyModifiers.control, KeyModifiers.alt, 0]) {
+          expect(
+            KeyFilters.isLinuxSessionKey(press(k, m, PeerPlatform.linux)),
+            isFalse,
+          );
+        }
+        for (final host in [
+          PeerPlatform.windows,
+          PeerPlatform.macos,
+          PeerPlatform.unknown,
+        ]) {
+          expect(
+            KeyFilters.isLinuxSessionKey(press(k, ctrlAlt, host)),
+            isFalse,
+          );
+        }
+      }
+      for (final k in [usageA, escape, keyT]) {
+        expect(
+          KeyFilters.isLinuxSessionKey(press(k, ctrlAlt, PeerPlatform.linux)),
+          isFalse,
+        );
+      }
+      // Held modifiers count as well as the reported ones.
+      expect(
+        KeyFilters.isLinuxSessionKey(
+          const KeyPress(
+            usage: f3,
+            heldModifiers: {ctrl, HidModifier.altRight},
+            hostPlatform: PeerPlatform.linux,
+          ),
+        ),
+        isTrue,
+      );
+    });
+
+    test('Ctrl+Alt+F3 and Ctrl+Alt+Backspace are dropped; the rest types', () {
+      fakeAsync((async) {
+        final rig = linuxHost(async);
+        combo(rig, [ctrl, alt], f3);
+        combo(rig, [ctrl, alt], backspace);
+        combo(rig, [ctrl], f3);
+        combo(rig, [alt], f4);
+        combo(rig, [ctrl, alt], keyT);
+        expect(pressed(rig.events), [
+          ctrl,
+          alt,
+          ctrl,
+          alt,
+          ctrl,
+          f3,
+          alt,
+          f4,
+          ctrl,
+          alt,
+          keyT,
+        ]);
+        expect(stuck(rig.events), isEmpty);
+        // Two presses and their repeats.
+        expect(rig.dropped(DropReason.systemKey), 4);
+      });
+    });
+
+    test("a Mac viewer's Cmd+Option+F3 is Ctrl+Alt+F3 there, and dropped", () {
+      fakeAsync((async) {
+        final rig = linuxHost(async, viewer: PeerPlatform.macos);
+        combo(rig, [meta, alt], f3);
+        expect(pressed(rig.events), [ctrl, alt]);
+        expect(stuck(rig.events), isEmpty);
+        expect(rig.dropped(DropReason.systemKey), 2);
+      });
+    });
+
+    test('a key held before the modifiers still lets go', () {
+      fakeAsync((async) {
+        final rig = linuxHost(async);
+        const both = KeyModifiers.control | KeyModifiers.alt;
+        rig.viewer
+          ..key(f3, KeyAction.down)
+          ..key(ctrl, KeyAction.down, modifiers: KeyModifiers.control)
+          ..key(alt, KeyAction.down, modifiers: both)
+          ..key(f3, KeyAction.repeat, modifiers: both)
+          ..key(f3, KeyAction.up, modifiers: both)
+          ..key(alt, KeyAction.up, modifiers: KeyModifiers.control)
+          ..key(ctrl, KeyAction.up);
+        rig.flush();
+        expect(pressed(rig.events), [f3, ctrl, alt]);
+        expect(stuck(rig.events), isEmpty);
+        expect(rig.dropped(DropReason.systemKey), 1);
+      });
+    });
+
+    test('allowSystemKeys lets them through', () {
+      fakeAsync((async) {
+        final allowed = linuxHost(
+          async,
+          options: const HostOptions(allowSystemKeys: true),
+        );
+        combo(allowed, [ctrl, alt], f3);
+        expect(pressed(allowed.events), [ctrl, alt, f3]);
+        expect(allowed.dropped(DropReason.systemKey), 0);
+      });
+    });
+
+    test('a Windows host gets Ctrl+Alt+F3', () {
+      fakeAsync((async) {
+        final windows = Rig(async);
+        combo(windows, [ctrl, alt], f3);
+        expect(pressed(windows.events), [ctrl, alt, f3]);
+        expect(windows.dropped(DropReason.systemKey), 0);
+      });
+    });
+  });
+
   group('KeyFilters.windowShare on a Windows host', () {
     test('drops the Windows key and every Win combination', () {
       fakeAsync((async) {

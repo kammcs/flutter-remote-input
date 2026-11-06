@@ -773,6 +773,7 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
       composing: _text.isComposing,
       processKey: event.logicalKey == LogicalKeyboardKey.process,
       altGr: ctrlAltIsAltGr(defaultTargetPlatform),
+      layoutShift: isLayoutShiftKey(event.logicalKey.keyId),
     );
     switch (route) {
       case KeyRoute.physical:
@@ -805,11 +806,19 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
 
   /// Presses on the host the modifiers the viewer holds but the host
   /// doesn't (lifted for an AltGr or Option character, or held before
-  /// focus), so a shortcut arrives whole.
+  /// focus), so a shortcut arrives whole. A key that only shifts the
+  /// viewer's layout (Linux's AltGr, [isLayoutShiftKey]) stays here outside
+  /// `physical` mode.
   void _pressHeldModifiers() {
-    for (final key in HardwareKeyboard.instance.physicalKeysPressed) {
+    final keyboard = HardwareKeyboard.instance;
+    final physicalMode = widget.keyboardMode == KeyboardMode.physical;
+    for (final key in keyboard.physicalKeysPressed) {
       final usage = key.usbHidUsage;
       if (!HidModifier.isModifier(usage) || _hostModifiers.contains(usage)) {
+        continue;
+      }
+      final logical = keyboard.lookUpLayout(key);
+      if (!physicalMode && logical != null && isLayoutShiftKey(logical.keyId)) {
         continue;
       }
       _hostModifiers.add(usage);
@@ -1037,7 +1046,14 @@ class _RemoteInputCaptureState extends State<RemoteInputCapture>
     final n = _normalize(event.localPosition);
     if (!isInsideUnit(n)) return;
     GestureBinding.instance.pointerSignalResolver.register(event, (e) {
-      _queueWheel(n, (e as PointerScrollEvent).scrollDelta);
+      _queueWheel(
+        n,
+        wheelDeltaToWire(
+          (e as PointerScrollEvent).scrollDelta,
+          defaultTargetPlatform,
+          web: kIsWeb,
+        ),
+      );
     });
   }
 

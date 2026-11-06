@@ -23,6 +23,13 @@ final _desktop = TargetPlatformVariant.only(TargetPlatform.macOS);
 /// A Windows viewer, where Ctrl+Alt is AltGr.
 final _windows = TargetPlatformVariant.only(TargetPlatform.windows);
 
+/// A Linux viewer, where AltGr is a key of its own (AltGraph).
+final _linux = TargetPlatformVariant.only(TargetPlatform.linux);
+
+/// The simulator's key map that has AltGraph (its Linux map doesn't); the
+/// capture sees the same logical and physical keys.
+const _altGraphMap = 'web';
+
 void main() {
   tearDown(RemoteInputHost.stopAll);
 
@@ -209,6 +216,101 @@ void main() {
       ]);
       await h.finish(tester);
     }, variant: _desktop);
+
+    testWidgets(
+      "on Linux, AltGr isn't sent: its characters go by text, and the host "
+      'sees no lone Alt (BIS-636)',
+      (tester) async {
+        final h = Harness(viewerPlatform: PeerPlatform.linux);
+        await h.start(tester, capture);
+        // A German layout's AltGr: Right Alt by position, AltGraph by
+        // meaning (ISO_Level3_Shift), with no Ctrl.
+        expect(
+          await tester.sendKeyDownEvent(
+            LogicalKeyboardKey.altGraph,
+            physicalKey: PhysicalKeyboardKey.altRight,
+            platform: _altGraphMap,
+          ),
+          isFalse,
+        );
+        expect(
+          await tester.sendKeyDownEvent(
+            LogicalKeyboardKey.keyQ,
+            character: '@',
+          ),
+          isFalse,
+        );
+        await h.type(tester, '@');
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyQ);
+        // Still holding AltGr, Enter is a plain Enter: AltGr isn't pressed
+        // on the host before it.
+        expect(await tester.sendKeyEvent(LogicalKeyboardKey.enter), isTrue);
+        await tester.sendKeyUpEvent(
+          LogicalKeyboardKey.altGraph,
+          physicalKey: PhysicalKeyboardKey.altRight,
+          platform: _altGraphMap,
+        );
+        await h.settle(tester);
+        expect(h.events, [
+          const InjectedText('@'),
+          _down(0x00070028),
+          _up(0x00070028),
+        ]);
+        await h.finish(tester);
+      },
+      variant: _linux,
+    );
+
+    testWidgets('on Linux, Ctrl+Alt+T is a shortcut, not AltGr (BIS-636)', (
+      tester,
+    ) async {
+      final h = Harness(viewerPlatform: PeerPlatform.linux);
+      await h.start(tester, capture);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      expect(
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyT, character: 't'),
+        isTrue,
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await h.settle(tester);
+      expect(h.events, [
+        _down(_ctrl),
+        _down(_alt),
+        _down(0x00070017),
+        _up(0x00070017),
+        _up(_alt),
+        _up(_ctrl),
+      ]);
+      await h.finish(tester);
+    }, variant: _linux);
+
+    testWidgets("in physical mode, Linux's AltGr is Right Alt on the host", (
+      tester,
+    ) async {
+      final h = Harness(viewerPlatform: PeerPlatform.linux);
+      await h.start(tester, (v) => capture(v, mode: KeyboardMode.physical));
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.altGraph,
+        physicalKey: PhysicalKeyboardKey.altRight,
+        platform: _altGraphMap,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyQ, character: '@');
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.altGraph,
+        physicalKey: PhysicalKeyboardKey.altRight,
+        platform: _altGraphMap,
+      );
+      await h.settle(tester);
+      expect(h.events, [
+        _down(_altRight),
+        _down(usageQ),
+        _up(usageQ),
+        _up(_altRight),
+      ]);
+      await h.finish(tester);
+    }, variant: _linux);
 
     testWidgets('IME composing shows locally, and only the commit is sent', (
       tester,

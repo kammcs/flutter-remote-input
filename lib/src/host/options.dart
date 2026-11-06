@@ -276,6 +276,32 @@ abstract final class KeyFilters {
     return true;
   }
 
+  /// Whether a press is one of a **Linux host's session keys**, which a
+  /// session drops with the system keys unless
+  /// [HostOptions.allowSystemKeys] is true (BIS-636): F1–F12 with Control
+  /// and Alt held (Ctrl+Alt+F1…F12 switches to another virtual terminal:
+  /// the login screen or a text console, through XKB's `Switch_VT`
+  /// actions, which injected keys trigger too), and Backspace with Control
+  /// and Alt (`Terminate_Server`, which ends the whole X session where the
+  /// XKB option is on). Both act outside the shared screen, on the whole
+  /// machine. A Linux viewer's own desktop takes them before they reach
+  /// Flutter, so they come from Windows and Mac viewers (a Mac's
+  /// Cmd+Option+F3 arrives as Ctrl+Alt+F3 after the modifier mapping).
+  ///
+  /// False on any other host: there Ctrl+Alt+F-keys are ordinary
+  /// shortcuts.
+  static bool isLinuxSessionKey(KeyPress press) {
+    if (press.hostPlatform != PeerPlatform.linux) return false;
+    final usage = press.usage;
+    if (!(usage >= _f1 && usage <= _f12) && usage != _backspace) return false;
+    var mods = press.modifiers;
+    for (final m in press.heldModifiers) {
+      mods |= HidModifier.bitOf(m);
+    }
+    const both = KeyModifiers.control | KeyModifiers.alt;
+    return mods & both == both;
+  }
+
   /// A filter that lets a press through only if every one of [filters]
   /// does, for combining presets with each other or with the app's own:
   /// `KeyFilters.all([KeyFilters.windowShare, KeyFilters.noPaste])`.
@@ -302,6 +328,7 @@ abstract final class KeyFilters {
   static const int _space = 0x0007002C;
   static const int _f1 = 0x0007003A;
   static const int _f12 = 0x00070045;
+  static const int _backspace = 0x0007002A;
   // Right, Left, Down, Up.
   static const int _right = 0x0007004F;
   static const int _up = 0x00070052;
